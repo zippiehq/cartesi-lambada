@@ -1,0 +1,4 @@
+target
+Cargo.lock
+cartesi_lambda/target
+cartesi_lambda/Cargo.lock

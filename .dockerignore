@@ -1,0 +1,7 @@
+target*/debug
+target*/**/.fingerprint
+target*/**/build
+target*/**/deps
+target*/**/examples
+target*/**/incremental
+target*/**/doc

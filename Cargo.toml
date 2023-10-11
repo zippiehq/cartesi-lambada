@@ -1,0 +1,6 @@
+[workspace]
+
+members = [
+  "blocks_stream",
+  "cartesi_lambda"
+]

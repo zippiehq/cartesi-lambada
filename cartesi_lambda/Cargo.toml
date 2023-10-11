@@ -1,0 +1,19 @@
+[package]
+name = "cartesi_lambda"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tracing = "0.1"
+hex = "0.4.3"
+ipfs-api = { version = "0.17.0", features = ["with-hyper-rustls"], default-features = false }
+hyper = { version = "0.14", features = ["full"] }
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3.28"
+jsonrpc-cartesi-machine = {git = "https://github.com/dymchenkko/jsonrpc-cartesi-machine"}
+cartesi-jsonrpc-interfaces = {git = "https://github.com/dymchenkko/jsonrpc-cartesi-machine"}
+serde_json = "1.0.100"
+futures = "0.3.28"
+async-std = { version = "1.12", features = ["attributes", "tokio1" ] }
