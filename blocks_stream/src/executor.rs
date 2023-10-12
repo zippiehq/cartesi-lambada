@@ -20,6 +20,7 @@ pub async fn subscribe(
     cartesi_machine_path: &str,
     ipfs_url: &str,
     vm_id: u64,
+    block_height: u64
 ) {
     let ExecutorOptions {
         sequencer_url,
@@ -51,7 +52,7 @@ pub async fn subscribe(
         .unwrap();
 
     let mut block_query_stream = hotshot
-        .socket("stream/blocks/0")
+        .socket(format!("stream/blocks/{}", block_height).as_str())
         .subscribe()
         .await
         .expect("Unable to subscribe to HotShot block stream");
@@ -60,8 +61,10 @@ pub async fn subscribe(
         match block_data {
             Ok(block) => {
                 let block: BlockQueryData<SeqTypes> = block;
+                tracing::info!("block height {}", block.height());
                 for tx in block.block().transactions() {
                     if u64::from(tx.vm()) as u64 == vm_id {
+                        tracing::info!("found tx for our vm id");
                         tracing::info!("tx.payload().len: {:?}", tx.payload().len());
                         let forked_machine_url =
                             format!("http://{}", machine.fork().await.unwrap());

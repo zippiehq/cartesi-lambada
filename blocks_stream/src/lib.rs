@@ -17,4 +17,13 @@ pub struct Options {
     /// Address of HotShot contract on layer 1.
     #[clap(long, env = "ESPRESSO_DEMO_HOTSHOT_ADDRESS")]
     pub hotshot_address: Address,
+
+    #[clap(long, env = "VM_ID")]
+    pub vm_id: u64,
+
+    #[clap(long, env = "HEIGHT")]
+    pub height: u64,
+
+    #[clap(long, env = "MACHINE_DIR")]
+    pub machine_dir: String,
 }
