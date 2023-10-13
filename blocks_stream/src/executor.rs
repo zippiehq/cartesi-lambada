@@ -1,3 +1,4 @@
+use hyper::client::conn::Connection;
 use surf_disco::Url;
 type HotShotClient = surf_disco::Client<hotshot_query_service::Error>;
 use cartesi_lambda::execute;
@@ -20,7 +21,8 @@ pub async fn subscribe(
     cartesi_machine_path: &str,
     ipfs_url: &str,
     vm_id: u64,
-    block_height: u64
+    block_height: u64,
+    connection: sqlite::Connection,
 ) {
     let ExecutorOptions {
         sequencer_url,
@@ -56,13 +58,20 @@ pub async fn subscribe(
         .subscribe()
         .await
         .expect("Unable to subscribe to HotShot block stream");
-
+    let mut hash: Vec<u8> = vec![0; 32];
     while let Some(block_data) = block_query_stream.next().await {
         match block_data {
             Ok(block) => {
                 let block: BlockQueryData<SeqTypes> = block;
-                tracing::info!("block height {}", block.height());
-                for tx in block.block().transactions() {
+                let height = block.height();
+                tracing::info!("block height {}", height);
+                let timestamp = block.timestamp().unix_timestamp() as u64;
+                hash = block.hash().into_bits().into_vec();
+
+                if block.block().transactions().len() != 0 {
+                    hash = block.hash().into_bits().into_vec();
+                }
+                for (index, tx) in block.block().transactions().into_iter().enumerate() {
                     if u64::from(tx.vm()) as u64 == vm_id {
                         tracing::info!("found tx for our vm id");
                         tracing::info!("tx.payload().len: {:?}", tx.payload().len());
@@ -72,9 +81,15 @@ pub async fn subscribe(
                             .await
                             .unwrap();
 
-                        execute(&mut machine, ipfs_url, tx.payload().to_vec()).await;
+                        //execute(&mut machine, ipfs_url, tx.payload().to_vec(), timestamp, height, index as u64).await;
                     }
                 }
+                let mut statement = connection
+                    .prepare("INSERT INTO blocks (hash, height) VALUES (?, ?)")
+                    .unwrap();
+                statement.bind((1, &hash as &[u8])).unwrap();
+                statement.bind((2, height as i64)).unwrap();
+                statement.next().unwrap();
             }
             Err(err) => {
                 tracing::error!("Error in HotShot block stream, retrying: {err}");

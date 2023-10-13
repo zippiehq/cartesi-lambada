@@ -18,6 +18,14 @@ async fn main() {
     let args: Vec<String> = env::args().collect();
 
     let cartesi_machine_path = args.get(1).unwrap();
+
+    let connection = sqlite::open(args.get(2).unwrap()).unwrap();
+    let query = "
+    CREATE TABLE IF NOT EXISTS blocks (hash BLOB(32) NOT NULL,
+    height INTEGER NOT NULL);
+";
+    connection.execute(query).unwrap();
+
     println!("cartesi_machine_path {:?}", cartesi_machine_path);
     let cartesi_machine_url = "http://127.0.0.1:50051".to_string();
     let ipfs_url = "http://127.0.0.1:5001";
@@ -47,5 +55,5 @@ async fn main() {
         .await
         .unwrap();
 
-    cartesi_lambda::execute(&mut machine, ipfs_url, vec![1, 2, 3, 4]).await;
+    cartesi_lambda::execute(&mut machine, ipfs_url, vec![1, 2, 3, 4], 0, 0, 0).await;
 }

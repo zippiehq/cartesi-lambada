@@ -17,6 +17,9 @@ pub async fn execute(
     machine: &mut JsonRpcCartesiMachineClient,
     ipfs_url: &str,
     payload: Vec<u8>,
+    timestamp: u64,
+    block_number: u64,
+    input_index: u64,
 ) {
     let client = IpfsClient::from_str(ipfs_url).unwrap();
 
@@ -24,10 +27,10 @@ pub async fn execute(
 
     let input_metadata = InputMetadata {
         msg_sender: String::from("0x71C7656EC7ab88b098defB751B7401B5f6d8976F"),
-        block_number: 0,
-        time_stamp: 0,
+        block_number: block_number,
+        time_stamp: timestamp,
         epoch_index: 0,
-        input_index: 0,
+        input_index: input_index,
     };
     let initial_config = cartesi_jsonrpc_interfaces::index::MachineConfig::from(
         &machine.clone().get_initial_config().await.unwrap(),
