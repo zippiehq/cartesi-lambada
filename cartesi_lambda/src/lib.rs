@@ -38,12 +38,25 @@ pub async fn execute(
     let rollup_config: cartesi_jsonrpc_interfaces::index::RollupConfig =
         initial_config.rollup.unwrap();
     load_rollup_input_and_metadata(machine, rollup_config, payload, input_metadata).await;
-//    let initial_root_hash = machine.get_root_hash().await.unwrap();
+    //    let initial_root_hash = machine.get_root_hash().await.unwrap();
 
     loop {
         let interpreter_break_reason = machine.run(u64::MAX).await.unwrap();
 
         if interpreter_break_reason == Value::String("yielded_manually".to_string()) {
+            let status = machine.read_csr("htif_tohost".to_string()).await.unwrap();
+
+            match (status >> 32) & 0xF {
+                0x1 => {
+                    println!("HTIF_YIELD_REASON_RX_ACCEPTED {:#X}", status);
+                }
+                0x2 => {
+                    println!("HTIF_YIELD_REASON_RX_REJECTED {:#X}", status);
+                }
+                _ => {
+                    println!("HTIF_YIELD_REASON_TX_EXCEPTION {:#X}", status);
+                }
+            }
             let read_opt_le_bytes = machine.read_memory(MACHINE_IO_ADDRESSS, 8).await.unwrap();
 
             let opt = u64::from_le_bytes(read_opt_le_bytes.try_into().unwrap());
@@ -229,13 +242,10 @@ async fn load_memory_range(
     data: Vec<u8>,
 ) {
     let mut address = config.start.unwrap();
-    let chunk_len = 1024*1024;
+    let chunk_len = 1024 * 1024;
     for chunk in data.chunks(chunk_len) {
-        machine
-        .write_memory(address, chunk.to_vec())
-        .await
-        .unwrap();
-        address += 1024*1024;
+        machine.write_memory(address, chunk.to_vec()).await.unwrap();
+        address += 1024 * 1024;
     }
 }
 struct InputMetadata {
