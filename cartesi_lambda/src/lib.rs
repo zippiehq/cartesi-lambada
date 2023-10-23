@@ -5,6 +5,7 @@ use jsonrpc_cartesi_machine::{JsonRpcCartesiMachineClient, MachineRuntimeConfig}
 
 use serde_json::Value;
 use std::ffi::CStr;
+use std::fmt::format;
 use std::io::Cursor;
 
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;
@@ -20,7 +21,16 @@ pub async fn execute(
     timestamp: u64,
     block_number: u64,
     input_index: u64,
+    connection: sqlite::Connection,
 ) {
+    let query = "CREATE TABLE IF NOT EXISTS transactions (
+        block_height INTEGER NOT NULL,
+        transaction_index INTEGER NOT NULL,
+        notice_count INTEGER NOT NULL,
+        notice BLOB NOT NULL,
+        PRIMARY KEY (block_height, transaction_index, notice_count)
+    );";
+    connection.execute(query).unwrap();
     let client = IpfsClient::from_str(ipfs_url).unwrap();
 
     machine.reset_iflags_y().await.unwrap();
@@ -37,18 +47,34 @@ pub async fn execute(
     );
     let rollup_config: cartesi_jsonrpc_interfaces::index::RollupConfig =
         initial_config.rollup.unwrap();
-    load_rollup_input_and_metadata(machine, rollup_config, payload, input_metadata).await;
+    load_rollup_input_and_metadata(machine, rollup_config.clone(), payload, input_metadata).await;
     //    let initial_root_hash = machine.get_root_hash().await.unwrap();
-
+    let mut notice: Vec<u8> = Vec::new();
+    let mut notice_count = 0;
     loop {
         let interpreter_break_reason = machine.run(u64::MAX).await.unwrap();
+        let status = machine.read_csr("htif_tohost".to_string()).await.unwrap();
 
         if interpreter_break_reason == Value::String("yielded_manually".to_string()) {
-            let status = machine.read_csr("htif_tohost".to_string()).await.unwrap();
-
             match (status >> 32) & 0xF {
                 0x1 => {
                     println!("HTIF_YIELD_REASON_RX_ACCEPTED {:#X}", status);
+                    let mut statement = connection
+                        .prepare(
+                            "INSERT OR REPLACE INTO transactions (block_height, transaction_index, notice_count, notice) VALUES (?, ?, ?, ?)",
+                        )
+                        .unwrap();
+                    statement
+                        .bind((1, block_number as i64))
+                        .unwrap();
+                    statement
+                        .bind((2, input_index as i64))
+                        .unwrap();
+                    statement
+                        .bind((3, notice_count as i64))
+                        .unwrap();
+                    statement.bind((4, &notice as &[u8])).unwrap();
+                    statement.next().unwrap();
                 }
                 0x2 => {
                     println!("HTIF_YIELD_REASON_RX_REJECTED {:#X}", status);
@@ -140,10 +166,29 @@ pub async fn execute(
             }
 
             machine.reset_iflags_y().await.unwrap();
+        } else if interpreter_break_reason == Value::String("yielded_automatically".to_string()) {
+            if ((status >> 32) & 0xF) == 0x4 {
+                println!("HTIF_YIELD_REASON_TX_NOTICE {:#X}", status);
+                let tx_buffer = rollup_config.tx_buffer.clone().unwrap();
+                let length = u64::from_be_bytes(
+                    machine
+                        .read_memory(tx_buffer.start.unwrap() + 32 + 24, 8)
+                        .await
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                );
+
+                notice = machine
+                    .read_memory(tx_buffer.start.unwrap() + 64, length)
+                    .await
+                    .unwrap();
+                notice_count+=1;
+            }
         } else if interpreter_break_reason == Value::String("halted".to_string()) {
             machine.shutdown().await.unwrap();
         } else {
-            tracing::info!(
+            println!(
                 "Machine root hash is : {:?}",
                 machine.get_root_hash().await.unwrap(),
             );
