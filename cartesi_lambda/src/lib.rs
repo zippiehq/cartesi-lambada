@@ -83,6 +83,28 @@ pub async fn execute(
                 }
                 0x2 => {
                     println!("HTIF_YIELD_REASON_RX_REJECTED {:#X}", status);
+                    count += 1;
+                    let mut statement = connection
+                        .prepare(
+                            "INSERT OR REPLACE INTO transactions (block_height, transaction_index, count, data, type) VALUES (?, ?, ?, ?, ?)",
+                        )
+                        .unwrap();
+                    statement
+                        .bind((1, block_number as i64))
+                        .unwrap();
+                    statement
+                        .bind((2, input_index as i64))
+                        .unwrap();
+                    statement
+                        .bind((3, count as i64))
+                        .unwrap();
+                    
+                    statement.bind((4, &[] as &[u8])).unwrap();
+                    
+                    statement
+                        .bind((5, "rejected"))
+                        .unwrap();
+                    statement.next().unwrap();
                 }
                 _ => {
                     println!("HTIF_YIELD_REASON_TX_EXCEPTION {:#X}", status);
@@ -193,6 +215,9 @@ pub async fn execute(
             }
 
             machine.reset_iflags_y().await.unwrap();
+            machine.destroy().await.unwrap();
+            machine.shutdown().await.unwrap();
+            break;
         } else if interpreter_break_reason == Value::String("yielded_automatically".to_string()) {
             match (status >> 32) & 0xF {
                 0x4 => {
@@ -290,7 +315,9 @@ pub async fn execute(
                 _ => {}
             }
         } else if interpreter_break_reason == Value::String("halted".to_string()) {
+            machine.destroy().await.unwrap();
             machine.shutdown().await.unwrap();
+            break;
         } else {
             println!(
                 "Machine root hash is : {:?}",
@@ -299,7 +326,6 @@ pub async fn execute(
             break;
         }
     }
-    machine.destroy().await.unwrap();
 }
 
 fn encode_input_metadata(data: InputMetadata) -> Vec<u8> {
