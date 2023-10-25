@@ -26,9 +26,10 @@ pub async fn execute(
     let query = "CREATE TABLE IF NOT EXISTS transactions (
         block_height INTEGER NOT NULL,
         transaction_index INTEGER NOT NULL,
-        notice_count INTEGER NOT NULL,
-        notice BLOB NOT NULL,
-        PRIMARY KEY (block_height, transaction_index, notice_count)
+        count INTEGER NOT NULL,
+        data BLOB NOT NULL,
+        type INTEGER NOT NULL,
+        PRIMARY KEY (block_height, transaction_index, count)
     );";
     connection.execute(query).unwrap();
     let client = IpfsClient::from_str(ipfs_url).unwrap();
@@ -49,19 +50,18 @@ pub async fn execute(
         initial_config.rollup.unwrap();
     load_rollup_input_and_metadata(machine, rollup_config.clone(), payload, input_metadata).await;
     //    let initial_root_hash = machine.get_root_hash().await.unwrap();
-    let mut notice: Vec<u8> = Vec::new();
-    let mut notice_count = 0;
+    let mut count = 0;
     loop {
         let interpreter_break_reason = machine.run(u64::MAX).await.unwrap();
         let status = machine.read_csr("htif_tohost".to_string()).await.unwrap();
-
         if interpreter_break_reason == Value::String("yielded_manually".to_string()) {
             match (status >> 32) & 0xF {
                 0x1 => {
                     println!("HTIF_YIELD_REASON_RX_ACCEPTED {:#X}", status);
+                    count += 1;
                     let mut statement = connection
                         .prepare(
-                            "INSERT OR REPLACE INTO transactions (block_height, transaction_index, notice_count, notice) VALUES (?, ?, ?, ?)",
+                            "INSERT OR REPLACE INTO transactions (block_height, transaction_index, count, data, type) VALUES (?, ?, ?, ?, ?)",
                         )
                         .unwrap();
                     statement
@@ -71,9 +71,14 @@ pub async fn execute(
                         .bind((2, input_index as i64))
                         .unwrap();
                     statement
-                        .bind((3, notice_count as i64))
+                        .bind((3, count as i64))
                         .unwrap();
-                    statement.bind((4, &notice as &[u8])).unwrap();
+                    
+                    statement.bind((4, &[] as &[u8])).unwrap();
+                    
+                    statement
+                        .bind((5, "accepted"))
+                        .unwrap();
                     statement.next().unwrap();
                 }
                 0x2 => {
@@ -81,6 +86,28 @@ pub async fn execute(
                 }
                 _ => {
                     println!("HTIF_YIELD_REASON_TX_EXCEPTION {:#X}", status);
+                    count += 1;
+                    let mut statement = connection
+                        .prepare(
+                            "INSERT OR REPLACE INTO transactions (block_height, transaction_index, count, data, type) VALUES (?, ?, ?, ?, ?)",
+                        )
+                        .unwrap();
+                    statement
+                        .bind((1, block_number as i64))
+                        .unwrap();
+                    statement
+                        .bind((2, input_index as i64))
+                        .unwrap();
+                    statement
+                        .bind((3, count as i64))
+                        .unwrap();
+                    
+                    statement.bind((4, &[] as &[u8])).unwrap();
+                    
+                    statement
+                        .bind((5, "exception"))
+                        .unwrap();
+                    statement.next().unwrap();
                 }
             }
             let read_opt_le_bytes = machine.read_memory(MACHINE_IO_ADDRESSS, 8).await.unwrap();
@@ -167,23 +194,100 @@ pub async fn execute(
 
             machine.reset_iflags_y().await.unwrap();
         } else if interpreter_break_reason == Value::String("yielded_automatically".to_string()) {
-            if ((status >> 32) & 0xF) == 0x4 {
-                println!("HTIF_YIELD_REASON_TX_NOTICE {:#X}", status);
-                let tx_buffer = rollup_config.tx_buffer.clone().unwrap();
-                let length = u64::from_be_bytes(
-                    machine
-                        .read_memory(tx_buffer.start.unwrap() + 32 + 24, 8)
-                        .await
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
+            match (status >> 32) & 0xF {
+                0x4 => {
+                    println!("HTIF_YIELD_REASON_TX_NOTICE {:#X}", status);
+                    let tx_buffer = rollup_config.tx_buffer.clone().unwrap();
+                    let length = u64::from_be_bytes(
+                        machine
+                            .read_memory(tx_buffer.start.unwrap() + 32 + 24, 8)
+                            .await
+                            .unwrap()
+                            .try_into()
+                            .unwrap(),
+                    );
 
-                notice = machine
-                    .read_memory(tx_buffer.start.unwrap() + 64, length)
-                    .await
-                    .unwrap();
-                notice_count+=1;
+                    let notice = machine
+                        .read_memory(tx_buffer.start.unwrap() + 64, length)
+                        .await
+                        .unwrap();
+                    count += 1;
+                    let mut statement = connection
+                        .prepare(
+                            "INSERT OR REPLACE INTO transactions (block_height, transaction_index, count, data, type) VALUES (?, ?, ?, ?, ?)",
+                        )
+                        .unwrap();
+                    statement
+                        .bind((1, block_number as i64))
+                        .unwrap();
+                    statement
+                        .bind((2, input_index as i64))
+                        .unwrap();
+                    statement
+                        .bind((3, count as i64))
+                        .unwrap();
+                    
+                    statement.bind((4, &notice as &[u8])).unwrap();
+                    
+                    statement
+                        .bind((5, "notice"))
+                        .unwrap();
+                    statement.next().unwrap();
+
+                }
+                0x3 => {
+                    println!("HTIF_YIELD_REASON_TX_VOUCHER {:#X}", status);
+                    count += 1;
+                    let mut statement = connection
+                        .prepare(
+                            "INSERT OR REPLACE INTO transactions (block_height, transaction_index, count, data, type) VALUES (?, ?, ?, ?, ?)",
+                        )
+                        .unwrap();
+                    statement
+                        .bind((1, block_number as i64))
+                        .unwrap();
+                    statement
+                        .bind((2, input_index as i64))
+                        .unwrap();
+                    statement
+                        .bind((3, count as i64))
+                        .unwrap();
+                    
+                    statement.bind((4, &[] as &[u8])).unwrap();
+                    
+                    statement
+                        .bind((5, "voucher"))
+                        .unwrap();
+                    statement.next().unwrap();
+
+                }
+                0x5 => {
+                    println!("HTIF_YIELD_REASON_TX_REPORT {:#X}", status);
+                    count += 1;
+                    let mut statement = connection
+                        .prepare(
+                            "INSERT OR REPLACE INTO transactions (block_height, transaction_index, count, data, type) VALUES (?, ?, ?, ?, ?)",
+                        )
+                        .unwrap();
+                    statement
+                        .bind((1, block_number as i64))
+                        .unwrap();
+                    statement
+                        .bind((2, input_index as i64))
+                        .unwrap();
+                    statement
+                        .bind((3, count as i64))
+                        .unwrap();
+                    
+                    statement.bind((4, &[] as &[u8])).unwrap();
+                    
+                    statement
+                        .bind((5, "report"))
+                        .unwrap();
+                    statement.next().unwrap();
+
+                }
+                _ => {}
             }
         } else if interpreter_break_reason == Value::String("halted".to_string()) {
             machine.shutdown().await.unwrap();
