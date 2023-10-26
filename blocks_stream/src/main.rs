@@ -26,7 +26,7 @@ async fn main() {
     }
 
     let opt = Options::parse();
-    let connection = sqlite::open(opt.db_dir).unwrap();
+    let connection = sqlite::open(opt.db_dir.clone()).unwrap();
     let query = "
     CREATE TABLE IF NOT EXISTS blocks (hash BLOB(32) NOT NULL,
     height INTEGER NOT NULL);
@@ -64,7 +64,7 @@ async fn main() {
             ipfs_url,
             vm_id,
             min_block_height,
-            connection
+            opt.db_dir
         ),
         server,
     );

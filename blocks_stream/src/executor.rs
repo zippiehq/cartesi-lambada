@@ -22,13 +22,14 @@ pub async fn subscribe(
     ipfs_url: &str,
     vm_id: u64,
     block_height: u64,
-    connection: sqlite::Connection,
+    db_dir: String,
 ) {
     let ExecutorOptions {
         sequencer_url,
         l1_provider: _,
         hotshot_address: _,
     } = opt;
+    let connection = sqlite::open(db_dir.clone()).unwrap();
 
     let query_service_url = sequencer_url.join("availability").unwrap();
     let hotshot = HotShotClient::new(query_service_url.clone());
@@ -80,8 +81,9 @@ pub async fn subscribe(
                         let mut machine = JsonRpcCartesiMachineClient::new(forked_machine_url)
                             .await
                             .unwrap();
+                        let connection = sqlite::open(db_dir.clone()).unwrap();
 
-                        //execute(&mut machine, ipfs_url, tx.payload().to_vec(), timestamp, height, index as u64).await;
+                        execute(&mut machine, ipfs_url, tx.payload().to_vec(), timestamp, height, index as u64, connection).await;
                     }
                 }
                 let mut statement = connection
