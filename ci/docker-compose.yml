@@ -1,0 +1,23 @@
+services:
+  validator:
+    image: validator
+    platform: "linux/amd64"
+    build:
+      context: .
+      dockerfile: Dockerfile.validator
+    volumes:
+      - shared:/shared
+
+  bridge:
+    image: bridge
+    platform: "linux/amd64"
+    build:
+      context: .
+      dockerfile: Dockerfile.bridge
+    volumes:
+      - shared:/shared
+    ports:
+      - 26658:26658
+
+volumes:
+  shared:
