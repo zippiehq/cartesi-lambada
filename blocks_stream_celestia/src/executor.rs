@@ -44,7 +44,6 @@ pub async fn subscribe(
     let mut hash: Vec<u8> = vec![0; 32];
 
     let token = env::var("CELESTIA_NODE_AUTH_TOKEN_WRITE").unwrap();
-    //let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJBbGxvdyI6WyJwdWJsaWMiLCJyZWFkIiwid3JpdGUiLCJhZG1pbiJdfQ.W8zbzdcK0kL6jLQjKrjBPWPgB03Kb0lZJQ5x2XCmz-o";
     let mut headers = HeaderMap::new();
     let val = HeaderValue::from_str(&format!("Bearer {token}")).unwrap();
     headers.insert(header::AUTHORIZATION, val);
@@ -53,7 +52,6 @@ pub async fn subscribe(
         .build(celestia_client_url)
         .unwrap();
     let client = CelestiaNodeAPI::new(transport);
-
     let mut state = client.HeaderSyncState().await.unwrap();
     while client
         .HeaderWaitForHeight(state.height.unwrap() + 1)

@@ -1,11 +1,11 @@
 use cartesi_jsonrpc_interfaces::index::MemoryRangeConfig;
 use futures::TryStreamExt;
-use ipfs_api::{IpfsApi, IpfsClient, TryFromUri};
+use ipfs_api_backend_hyper::{IpfsApi, IpfsClient,TryFromUri};
+
 use jsonrpc_cartesi_machine::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
 
 use serde_json::Value;
 use std::ffi::CStr;
-use std::fmt::format;
 use std::io::Cursor;
 
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;

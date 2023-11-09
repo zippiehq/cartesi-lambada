@@ -2,5 +2,6 @@
 
 members = [
   "blocks_stream",
+  "blocks_stream_celestia",
   "cartesi_lambda"
 ]

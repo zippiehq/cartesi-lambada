@@ -6,7 +6,8 @@ use ethers::prelude::*;
 use hotshot_query_service::availability::BlockQueryData;
 use jsonrpc_cartesi_machine::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
 use sequencer::SeqTypes;
-
+use std::sync::Arc;
+use std::sync::Mutex;
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;
 #[derive(Clone, Debug)]
 pub struct ExecutorOptions {
