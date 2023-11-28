@@ -1,22 +1,16 @@
-use cartesi_jsonrpc_interfaces::index::MemoryRangeConfig;
 use futures::TryStreamExt;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 
-use jsonrpc_cartesi_machine::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
-
-use serde_json::Value;
-use std::ffi::CStr;
-use std::io::Cursor;
+use cid::Cid;
+use jsonrpc_cartesi_machine::JsonRpcCartesiMachineClient;
+use std::{io::Cursor, vec};
 
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;
 const READ_BLOCK: u64 = 0x00001;
 const EXCEPTION: u64 = 0x00002;
 const LOAD_TX: u64 = 0x00003;
 const FINISH: u64 = 0x00004;
-
-const HINT: u64 = 2;
 const WRITE_BLOCK: u64 = 0x000005;
-const STEP: u64 = 4;
 
 pub async fn execute(
     machine: &mut JsonRpcCartesiMachineClient,
@@ -25,7 +19,8 @@ pub async fn execute(
     timestamp: u64,
     block_number: u64,
     input_index: u64,
-    connection: sqlite::Connection,
+    connection_path: String,
+    genesis_cid: Option<String>
 ) {
     let query = "CREATE TABLE IF NOT EXISTS transactions (
         block_height INTEGER NOT NULL,
@@ -35,6 +30,8 @@ pub async fn execute(
         type INTEGER NOT NULL,
         PRIMARY KEY (block_height, transaction_index, count)
     );";
+    let connection = sqlite::open(connection_path.clone()).unwrap();
+
     connection.execute(query).unwrap();
     let client = IpfsClient::from_str(ipfs_url).unwrap();
 
@@ -43,14 +40,11 @@ pub async fn execute(
     let initial_config = cartesi_jsonrpc_interfaces::index::MachineConfig::from(
         &machine.clone().get_initial_config().await.unwrap(),
     );
-    let mut rollup_config: cartesi_jsonrpc_interfaces::index::RollupConfig =
+    let rollup_config: cartesi_jsonrpc_interfaces::index::RollupConfig =
         initial_config.rollup.unwrap();
     //    let initial_root_hash = machine.get_root_hash().await.unwrap();
     let mut count = 0;
     loop {
-        let interpreter_break_reason = machine.run(u64::MAX).await.unwrap();
-        let status = machine.read_csr("htif_tohost".to_string()).await.unwrap();
-
         let read_opt_be_bytes = machine.read_memory(MACHINE_IO_ADDRESSS, 8).await.unwrap();
 
         let opt = u64::from_be_bytes(read_opt_be_bytes.try_into().unwrap());
@@ -122,20 +116,38 @@ pub async fn execute(
                 statement.next().unwrap();
             }
             LOAD_TX => {
-                let input_metadata = InputMetadata {
-                    msg_sender: String::from("0x71C7656EC7ab88b098defB751B7401B5f6d8976F"),
-                    block_number: block_number,
-                    time_stamp: timestamp,
-                    epoch_index: 0,
-                    input_index: input_index,
-                };
-                load_rollup_input_and_metadata(
-                    machine,
-                    rollup_config.clone(),
-                    payload.clone(),
-                    input_metadata,
-                )
-                .await;
+                let mut current_cid: Vec<u8> = Vec::new();
+                if genesis_cid.clone().is_some() {
+                    current_cid = Cid::try_from(genesis_cid.clone().unwrap()).unwrap().to_bytes()
+                } else {
+                    let cid = get_current_status(connection_path.clone(), input_index as i64, count).expect("cid not found");
+                    current_cid = Cid::try_from(cid).unwrap().to_bytes();
+                }
+  
+                let cid_length = current_cid.len() as u64;
+
+                machine
+                    .write_memory(MACHINE_IO_ADDRESSS, cid_length.to_be_bytes().to_vec())
+                    .await
+                    .unwrap();
+                machine
+                    .write_memory(MACHINE_IO_ADDRESSS + 8, current_cid)
+                    .await
+                    .unwrap();
+
+                let payload_length = payload.clone().len().to_be_bytes();
+
+                machine
+                    .write_memory(
+                        MACHINE_IO_ADDRESSS + 16 + cid_length,
+                        payload_length.to_vec(),
+                    )
+                    .await
+                    .unwrap();
+                machine
+                    .write_memory(MACHINE_IO_ADDRESSS + 24 + cid_length, payload.clone())
+                    .await
+                    .unwrap();
             }
             FINISH => {
                 let status = u64::from_be_bytes(
@@ -223,6 +235,30 @@ pub async fn execute(
     }
 }
 
+fn get_current_status(
+    connection_path: String,
+    input_index: i64,
+    count: i64,
+) -> Option<Vec<u8>> {
+    let connection = sqlite::open(connection_path.clone()).unwrap();
+
+    let mut statement = connection
+        .prepare("SELECT * FROM transactions WHERE transaction_index = ? AND count = ?")
+        .unwrap();
+    statement.bind((1, input_index as i64)).unwrap();
+    statement.bind((2, count as i64)).unwrap();
+
+    if let Ok(sqlite::State::Row) = statement.next() {
+        let tx_status = statement.read::<String, _>("type").unwrap();
+
+        if tx_status == "exception" {
+            get_current_status(connection_path, input_index, count - 1);
+        }
+        return Some(statement.read::<Vec<u8>, _>("data").unwrap());
+    }
+    None
+}
+
 fn encode_input_metadata(data: InputMetadata) -> Vec<u8> {
     let msg_sender = unhexhash(data.msg_sender, "msg_sender");
 
@@ -286,7 +322,10 @@ async fn load_rollup_input_and_metadata(
 
     let input_metadata = encode_input_metadata(input_metadata);
     machine
-        .write_memory(MACHINE_IO_ADDRESSS + 8, input_metadata.len().to_be_bytes().to_vec())
+        .write_memory(
+            MACHINE_IO_ADDRESSS + 8,
+            input_metadata.len().to_be_bytes().to_vec(),
+        )
         .await
         .unwrap();
     let mut start = config.input_metadata.unwrap();
