@@ -1,6 +1,6 @@
 use cartesi_jsonrpc_interfaces::index::MemoryRangeConfig;
 use futures::TryStreamExt;
-use ipfs_api_backend_hyper::{IpfsApi, IpfsClient,TryFromUri};
+use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 
 use jsonrpc_cartesi_machine::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
 
@@ -9,9 +9,13 @@ use std::ffi::CStr;
 use std::io::Cursor;
 
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;
-const READ_BLOCK: u64 = 1;
+const READ_BLOCK: u64 = 0x00001;
+const EXCEPTION: u64 = 0x00002;
+const LOAD_TX: u64 = 0x00003;
+const FINISH: u64 = 0x00004;
+
 const HINT: u64 = 2;
-const WRITE_BLOCK: u64 = 3;
+const WRITE_BLOCK: u64 = 0x000005;
 const STEP: u64 = 4;
 
 pub async fn execute(
@@ -36,294 +40,185 @@ pub async fn execute(
 
     machine.reset_iflags_y().await.unwrap();
 
-    let input_metadata = InputMetadata {
-        msg_sender: String::from("0x71C7656EC7ab88b098defB751B7401B5f6d8976F"),
-        block_number: block_number,
-        time_stamp: timestamp,
-        epoch_index: 0,
-        input_index: input_index,
-    };
     let initial_config = cartesi_jsonrpc_interfaces::index::MachineConfig::from(
         &machine.clone().get_initial_config().await.unwrap(),
     );
-    let rollup_config: cartesi_jsonrpc_interfaces::index::RollupConfig =
+    let mut rollup_config: cartesi_jsonrpc_interfaces::index::RollupConfig =
         initial_config.rollup.unwrap();
-    load_rollup_input_and_metadata(machine, rollup_config.clone(), payload, input_metadata).await;
     //    let initial_root_hash = machine.get_root_hash().await.unwrap();
     let mut count = 0;
     loop {
         let interpreter_break_reason = machine.run(u64::MAX).await.unwrap();
         let status = machine.read_csr("htif_tohost".to_string()).await.unwrap();
-        if interpreter_break_reason == Value::String("yielded_manually".to_string()) {
-            match (status >> 32) & 0xF {
-                0x1 => {
-                    println!("HTIF_YIELD_REASON_RX_ACCEPTED {:#X}", status);
-                    count += 1;
-                    let mut statement = connection
-                        .prepare(
-                            "INSERT OR REPLACE INTO transactions (block_height, transaction_index, count, data, type) VALUES (?, ?, ?, ?, ?)",
-                        )
-                        .unwrap();
-                    statement
-                        .bind((1, block_number as i64))
-                        .unwrap();
-                    statement
-                        .bind((2, input_index as i64))
-                        .unwrap();
-                    statement
-                        .bind((3, count as i64))
-                        .unwrap();
-                    
-                    statement.bind((4, &[] as &[u8])).unwrap();
-                    
-                    statement
-                        .bind((5, "accepted"))
-                        .unwrap();
-                    statement.next().unwrap();
-                }
-                0x2 => {
-                    println!("HTIF_YIELD_REASON_RX_REJECTED {:#X}", status);
-                    count += 1;
-                    let mut statement = connection
-                        .prepare(
-                            "INSERT OR REPLACE INTO transactions (block_height, transaction_index, count, data, type) VALUES (?, ?, ?, ?, ?)",
-                        )
-                        .unwrap();
-                    statement
-                        .bind((1, block_number as i64))
-                        .unwrap();
-                    statement
-                        .bind((2, input_index as i64))
-                        .unwrap();
-                    statement
-                        .bind((3, count as i64))
-                        .unwrap();
-                    
-                    statement.bind((4, &[] as &[u8])).unwrap();
-                    
-                    statement
-                        .bind((5, "rejected"))
-                        .unwrap();
-                    statement.next().unwrap();
-                }
-                _ => {
-                    println!("HTIF_YIELD_REASON_TX_EXCEPTION {:#X}", status);
-                    count += 1;
-                    let mut statement = connection
-                        .prepare(
-                            "INSERT OR REPLACE INTO transactions (block_height, transaction_index, count, data, type) VALUES (?, ?, ?, ?, ?)",
-                        )
-                        .unwrap();
-                    statement
-                        .bind((1, block_number as i64))
-                        .unwrap();
-                    statement
-                        .bind((2, input_index as i64))
-                        .unwrap();
-                    statement
-                        .bind((3, count as i64))
-                        .unwrap();
-                    
-                    statement.bind((4, &[] as &[u8])).unwrap();
-                    
-                    statement
-                        .bind((5, "exception"))
-                        .unwrap();
-                    statement.next().unwrap();
-                }
-            }
-            let read_opt_le_bytes = machine.read_memory(MACHINE_IO_ADDRESSS, 8).await.unwrap();
 
-            let opt = u64::from_le_bytes(read_opt_le_bytes.try_into().unwrap());
+        let read_opt_be_bytes = machine.read_memory(MACHINE_IO_ADDRESSS, 8).await.unwrap();
 
-            match opt {
-                READ_BLOCK => {
-                    let cid = String::from_utf8(
-                        machine
-                            .read_memory(MACHINE_IO_ADDRESSS + 0x100, 46)
-                            .await
-                            .unwrap(),
-                    )
+        let opt = u64::from_be_bytes(read_opt_be_bytes.try_into().unwrap());
+
+        match opt {
+            READ_BLOCK => {
+                let length = u64::from_be_bytes(
+                    machine
+                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
+                        .await
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                );
+
+                let cid = String::from_utf8(
+                    machine
+                        .read_memory(MACHINE_IO_ADDRESSS + 16, length)
+                        .await
+                        .unwrap(),
+                )
+                .unwrap();
+
+                let block = client
+                    .block_get(cid.as_str())
+                    .map_ok(|chunk| chunk.to_vec())
+                    .try_concat()
+                    .await
                     .unwrap();
 
-                    let block = client
-                        .block_get(cid.as_str())
-                        .map_ok(|chunk| chunk.to_vec())
-                        .try_concat()
-                        .await
-                        .unwrap();
-
-                    machine
-                        .write_memory(MACHINE_IO_ADDRESSS + 0x200, block.clone())
-                        .await
-                        .unwrap();
-                    machine
-                        .write_memory(
-                            MACHINE_IO_ADDRESSS + 0x100,
-                            block.len().to_le_bytes().to_vec(),
-                        )
-                        .await
-                        .unwrap();
-                }
-                HINT => {
-                    let str_bytes = machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 0x100, 256)
-                        .await
-                        .unwrap();
-                    let c_str = CStr::from_bytes_until_nul(&str_bytes).unwrap();
-                    let regular_str = c_str.to_str().unwrap();
-
-                    println!("{:?}", regular_str);
-                }
-                WRITE_BLOCK => {
-                    let length = u64::from_le_bytes(
-                        machine
-                            .read_memory(MACHINE_IO_ADDRESSS + 0x100, 8)
-                            .await
-                            .unwrap()
-                            .try_into()
-                            .unwrap(),
-                    );
-
-                    let memory = machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 0x200, length)
-                        .await
-                        .unwrap();
-
-                    let data = Cursor::new(memory);
-
-                    client.block_put(data).await.unwrap();
-                }
-                /*STEP => {
-                    let step = u64::from_le_bytes(
-                        machine
-                            .read_memory(MACHINE_IO_ADDRESSS + 0x100, 8)
-                            .await
-                            .unwrap()
-                            .try_into()
-                            .unwrap(),
-                    );
-
-                    machine
-                        .store(
-                            std::format!("{}-{:?}", hex::encode(initial_root_hash), step).as_str(),
-                        )
-                        .await
-                        .unwrap();
-                }*/
-                _ => {}
+                machine
+                    .write_memory(MACHINE_IO_ADDRESSS + 16, block.clone())
+                    .await
+                    .unwrap();
+                machine
+                    .write_memory(MACHINE_IO_ADDRESSS, block.len().to_le_bytes().to_vec())
+                    .await
+                    .unwrap();
             }
-
-            machine.reset_iflags_y().await.unwrap();
-            machine.destroy().await.unwrap();
-            machine.shutdown().await.unwrap();
-            break;
-        } else if interpreter_break_reason == Value::String("yielded_automatically".to_string()) {
-            match (status >> 32) & 0xF {
-                0x4 => {
-                    println!("HTIF_YIELD_REASON_TX_NOTICE {:#X}", status);
-                    let tx_buffer = rollup_config.tx_buffer.clone().unwrap();
-                    let length = u64::from_be_bytes(
-                        machine
-                            .read_memory(tx_buffer.start.unwrap() + 32 + 24, 8)
-                            .await
-                            .unwrap()
-                            .try_into()
-                            .unwrap(),
-                    );
-
-                    let notice = machine
-                        .read_memory(tx_buffer.start.unwrap() + 64, length)
+            EXCEPTION => {
+                let length = u64::from_be_bytes(
+                    machine
+                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
                         .await
-                        .unwrap();
-                    count += 1;
-                    let mut statement = connection
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                );
+
+                let data = machine
+                    .read_memory(MACHINE_IO_ADDRESSS + 16, length)
+                    .await
+                    .unwrap();
+
+                println!("HTIF_YIELD_REASON_TX_EXCEPTION");
+                count += 1;
+                let mut statement = connection
                         .prepare(
                             "INSERT OR REPLACE INTO transactions (block_height, transaction_index, count, data, type) VALUES (?, ?, ?, ?, ?)",
                         )
                         .unwrap();
-                    statement
-                        .bind((1, block_number as i64))
-                        .unwrap();
-                    statement
-                        .bind((2, input_index as i64))
-                        .unwrap();
-                    statement
-                        .bind((3, count as i64))
-                        .unwrap();
-                    
-                    statement.bind((4, &notice as &[u8])).unwrap();
-                    
-                    statement
-                        .bind((5, "notice"))
-                        .unwrap();
-                    statement.next().unwrap();
+                statement.bind((1, block_number as i64)).unwrap();
+                statement.bind((2, input_index as i64)).unwrap();
+                statement.bind((3, count as i64)).unwrap();
 
-                }
-                0x3 => {
-                    println!("HTIF_YIELD_REASON_TX_VOUCHER {:#X}", status);
-                    count += 1;
-                    let mut statement = connection
-                        .prepare(
-                            "INSERT OR REPLACE INTO transactions (block_height, transaction_index, count, data, type) VALUES (?, ?, ?, ?, ?)",
-                        )
-                        .unwrap();
-                    statement
-                        .bind((1, block_number as i64))
-                        .unwrap();
-                    statement
-                        .bind((2, input_index as i64))
-                        .unwrap();
-                    statement
-                        .bind((3, count as i64))
-                        .unwrap();
-                    
-                    statement.bind((4, &[] as &[u8])).unwrap();
-                    
-                    statement
-                        .bind((5, "voucher"))
-                        .unwrap();
-                    statement.next().unwrap();
+                statement.bind((4, data.as_slice() as &[u8])).unwrap();
 
-                }
-                0x5 => {
-                    println!("HTIF_YIELD_REASON_TX_REPORT {:#X}", status);
-                    count += 1;
-                    let mut statement = connection
-                        .prepare(
-                            "INSERT OR REPLACE INTO transactions (block_height, transaction_index, count, data, type) VALUES (?, ?, ?, ?, ?)",
-                        )
-                        .unwrap();
-                    statement
-                        .bind((1, block_number as i64))
-                        .unwrap();
-                    statement
-                        .bind((2, input_index as i64))
-                        .unwrap();
-                    statement
-                        .bind((3, count as i64))
-                        .unwrap();
-                    
-                    statement.bind((4, &[] as &[u8])).unwrap();
-                    
-                    statement
-                        .bind((5, "report"))
-                        .unwrap();
-                    statement.next().unwrap();
-
-                }
-                _ => {}
+                statement.bind((5, "exception")).unwrap();
+                statement.next().unwrap();
             }
-        } else if interpreter_break_reason == Value::String("halted".to_string()) {
-            machine.destroy().await.unwrap();
-            machine.shutdown().await.unwrap();
-            break;
-        } else {
-            println!(
-                "Machine root hash is : {:?}",
-                machine.get_root_hash().await.unwrap(),
-            );
-            break;
+            LOAD_TX => {
+                let input_metadata = InputMetadata {
+                    msg_sender: String::from("0x71C7656EC7ab88b098defB751B7401B5f6d8976F"),
+                    block_number: block_number,
+                    time_stamp: timestamp,
+                    epoch_index: 0,
+                    input_index: input_index,
+                };
+                load_rollup_input_and_metadata(
+                    machine,
+                    rollup_config.clone(),
+                    payload.clone(),
+                    input_metadata,
+                )
+                .await;
+            }
+            FINISH => {
+                let status = u64::from_be_bytes(
+                    machine
+                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
+                        .await
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                );
+
+                let length = u64::from_be_bytes(
+                    machine
+                        .read_memory(MACHINE_IO_ADDRESSS + 16, 8)
+                        .await
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                );
+
+                let data = machine
+                    .read_memory(MACHINE_IO_ADDRESSS + 24, length)
+                    .await
+                    .unwrap();
+
+                match status {
+                    0 => {
+                        println!("HTIF_YIELD_REASON_RX_ACCEPTED");
+                        count += 1;
+                        let mut statement = connection
+                                .prepare(
+                                    "INSERT OR REPLACE INTO transactions (block_height, transaction_index, count, data, type) VALUES (?, ?, ?, ?, ?)",
+                                )
+                                .unwrap();
+                        statement.bind((1, block_number as i64)).unwrap();
+                        statement.bind((2, input_index as i64)).unwrap();
+                        statement.bind((3, count as i64)).unwrap();
+
+                        statement.bind((4, data.as_slice() as &[u8])).unwrap();
+
+                        statement.bind((5, "accepted")).unwrap();
+                        statement.next().unwrap();
+                    }
+                    1 => {
+                        println!("HTIF_YIELD_REASON_RX_REJECTED");
+                        count += 1;
+                        let mut statement = connection
+                                .prepare(
+                                    "INSERT OR REPLACE INTO transactions (block_height, transaction_index, count, data, type) VALUES (?, ?, ?, ?, ?)",
+                                )
+                                .unwrap();
+                        statement.bind((1, block_number as i64)).unwrap();
+                        statement.bind((2, input_index as i64)).unwrap();
+                        statement.bind((3, count as i64)).unwrap();
+
+                        statement.bind((4, data.as_slice() as &[u8])).unwrap();
+
+                        statement.bind((5, "rejected")).unwrap();
+                        statement.next().unwrap();
+                    }
+                    _ => {}
+                }
+            }
+            WRITE_BLOCK => {
+                let length = u64::from_be_bytes(
+                    machine
+                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
+                        .await
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                );
+
+                let memory = machine
+                    .read_memory(MACHINE_IO_ADDRESSS + 16, length)
+                    .await
+                    .unwrap();
+
+                let data = Cursor::new(memory);
+
+                client.block_put(data).await.unwrap();
+            }
+            _ => {}
         }
     }
 }
@@ -388,12 +283,15 @@ async fn load_rollup_input_and_metadata(
         .replace_memory_range(config.input_metadata.clone().unwrap())
         .await
         .unwrap();
-    load_memory_range(
-        machine,
-        config.input_metadata.unwrap(),
-        encode_input_metadata(input_metadata),
-    )
-    .await;
+
+    let input_metadata = encode_input_metadata(input_metadata);
+    machine
+        .write_memory(MACHINE_IO_ADDRESSS + 8, input_metadata.len().to_be_bytes().to_vec())
+        .await
+        .unwrap();
+    let mut start = config.input_metadata.unwrap();
+    start.start = Some(MACHINE_IO_ADDRESSS + 16);
+    load_memory_range(machine, start, input_metadata).await;
 
     machine
         .replace_memory_range(config.rx_buffer.clone().unwrap())
