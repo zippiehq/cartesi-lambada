@@ -48,4 +48,4 @@ COPY target/release/blocks_stream_celestia /bin/blocks_stream_celestia
 COPY target/release/cartesi_lambda /bin/cartesi_lambda
 COPY program program
 COPY program/test-files /root/share/images
-CMD sh -c "ipfs daemon & sleep 10 && /usr/bin/jsonrpc-remote-cartesi-machine --server-address=127.0.0.1:50051 & sleep 10 && RUST_LOG=info /bin/blocks_stream --sequencer-url https://query.cortado.espresso.network/  --l1-provider wss://eth-sepolia.g.alchemy.com/v2/ynVGpb2sD3HhbMBR4aGbYTw5Sd2aLUQh --hotshot-address 0xed15e1fe0789c524398137a066ceb2ef9884e5d8 --vm-id 1000 --height 0 --machine-dir /machines/txnotice"
+CMD sh -c "ipfs daemon & sleep 10 && /usr/bin/jsonrpc-remote-cartesi-machine --server-address=127.0.0.1:50051 & sleep 10 && RUST_LOG=info /bin/blocks_stream --sequencer-url https://query.cortado.espresso.network/  --l1-provider wss://eth-sepolia.g.alchemy.com/v2/ynVGpb2sD3HhbMBR4aGbYTw5Sd2aLUQh --hotshot-address 0xed15e1fe0789c524398137a066ceb2ef9884e5d8 --vm-id 1000 --height 0 --machine-dir /machines/ipfs-using"

@@ -24,6 +24,7 @@ pub async fn subscribe(
     vm_id: u64,
     block_height: u64,
     db_dir: String,
+    state_cid: Vec<u8>
 ) {
     let ExecutorOptions {
         sequencer_url,
@@ -61,6 +62,9 @@ pub async fn subscribe(
         .await
         .expect("Unable to subscribe to HotShot block stream");
     let mut hash: Vec<u8> = vec![0; 32];
+    let exception_err = std::io::Error::new(std::io::ErrorKind::Other, "exception");
+    let mut current_cid: Vec<u8> = state_cid;
+
     while let Some(block_data) = block_query_stream.next().await {
         match block_data {
             Ok(block) => {
@@ -84,7 +88,16 @@ pub async fn subscribe(
                             .unwrap();
                         let connection = sqlite::open(db_dir.clone()).unwrap();
 
-                        execute(&mut machine, ipfs_url, tx.payload().to_vec(), timestamp, height, index as u64, connection).await;
+                        let result = execute(&mut machine, ipfs_url, tx.payload().to_vec(), current_cid.clone()).await;
+                        if let Ok(cid) = result {
+                            current_cid = cid;
+                        }
+                        else if let Some(exception_err) = result.as_ref().err() {
+                            current_cid = execute(&mut machine, ipfs_url, tx.payload().to_vec(), current_cid).await.unwrap();
+                        }
+                        else {
+                            result.unwrap();
+                        }
                     }
                 }
                 let mut statement = connection

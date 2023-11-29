@@ -55,5 +55,5 @@ async fn main() {
         .await
         .unwrap();
 
-    cartesi_lambda::execute(&mut machine, ipfs_url, vec![1, 2, 3, 4], 0, 0, 0, args.get(2).unwrap()).await;
+    //cartesi_lambda::execute(&mut machine, ipfs_url, vec![1, 2, 3, 4], 0, 0, 0, args.get(2).unwrap()).await;
 }

@@ -101,7 +101,7 @@ async fn request_handler(reqest: Request<Body>) -> Result<Response<Body>, hyper:
                     .await
                     .unwrap();
                 let ipfs_url = "http://127.0.0.1:5001";
-                execute(&mut machine, ipfs_url, data, 1, 1234, 0, connection).await;
+                //execute(&mut machine, ipfs_url, data, 1, 1234, 0, connection).await;
                 let connection = sqlite::open("sequencer_db").unwrap();
 
                 let query = "SELECT * FROM transactions where type = 'notice' AND block_height=1234 AND transaction_index=0 ";

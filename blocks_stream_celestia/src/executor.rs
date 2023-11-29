@@ -78,7 +78,7 @@ pub async fn subscribe(
                         .unwrap();
                     let connection = sqlite::open(db_dir.clone()).unwrap();
                     let header = client.HeaderGetByHeight(state.height.unwrap()).await.unwrap().commit.unwrap();
-                    execute(
+                    /*execute(
                         &mut machine,
                         ipfs_url,
                         base64::decode(tx.data.unwrap()).unwrap(),
@@ -87,7 +87,7 @@ pub async fn subscribe(
                         index as u64,
                         connection,
                     )
-                    .await;
+                    .await;*/
                 }
                 let mut statement = connection
                     .prepare("INSERT INTO blocks (hash, height) VALUES (?, ?)")

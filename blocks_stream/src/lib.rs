@@ -29,4 +29,7 @@ pub struct Options {
 
     #[clap(long, env = "DB_DIR", default_value = "sequencer_db")]
     pub db_dir: String,
+
+    #[clap(long, env = "STATE_CID")]
+    pub state_cid: String,
 }

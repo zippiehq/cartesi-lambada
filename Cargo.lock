@@ -1330,6 +1330,7 @@ dependencies = [
  "async-std",
  "bincode",
  "cartesi_lambda",
+ "cid",
  "clap",
  "contract-bindings",
  "ethers",

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use sqlite::State;
 use std::fmt::format;
 use std::process::Command;
+use cid::Cid;
 #[async_std::main]
 async fn main() {
     let output = Command::new("sh")
@@ -60,6 +61,7 @@ async fn main() {
     });
 
     let server = Server::bind(&addr).serve(Box::new(service));
+    let state_cid = Cid::try_from(opt.state_cid).unwrap().to_bytes();
 
     join!(
         subscribe(
@@ -69,7 +71,8 @@ async fn main() {
             ipfs_url,
             vm_id,
             min_block_height,
-            opt.db_dir
+            opt.db_dir,
+            state_cid
         ),
         server,
     );
@@ -106,7 +109,7 @@ async fn request_handler(reqest: Request<Body>) -> Result<Response<Body>, hyper:
                     .await
                     .unwrap();
                 let ipfs_url = "http://127.0.0.1:5001";
-                execute(&mut machine, ipfs_url, data, 1, 1234, 0, connection).await;
+                //execute(&mut machine, ipfs_url, data, 1, 1234, 0, connection).await;
                 let connection = sqlite::open("sequencer_db").unwrap();
 
                 let query = "SELECT * FROM transactions where type = 'notice' AND block_height=1234 AND transaction_index=0 ";
