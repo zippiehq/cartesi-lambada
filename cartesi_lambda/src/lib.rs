@@ -5,6 +5,7 @@ use cid::Cid;
 use jsonrpc_cartesi_machine::JsonRpcCartesiMachineClient;
 use serde_json::Value;
 use std::io::Cursor;
+use sequencer::L1BlockInfo;
 
 pub const MACHINE_IO_ADDRESSS: u64 = 0x90000000000000;
 const READ_BLOCK: u64 = 0x00001;
@@ -20,7 +21,8 @@ pub async fn execute(
     ipfs_url: &str,
     payload: Vec<u8>,
     state_cid: Vec<u8>,
-    app_cid: Vec<u8>,
+    app_cid: String,
+    block_info: &L1BlockInfo
 ) -> Result<Vec<u8>, std::io::Error> {
     let client = IpfsClient::from_str(ipfs_url).unwrap();
     machine.reset_iflags_y().await.unwrap();
@@ -114,19 +116,28 @@ pub async fn execute(
                     .await
                     .unwrap();
 
-                let app_cid = Cid::try_from(app_cid.clone()).unwrap().to_bytes();
-                let app_cid_length = app_cid.len() as u64;
+                let block_number = block_info.number.to_be_bytes();
 
                 machine
-                    .write_memory(MACHINE_IO_ADDRESSS + 24 + cid_length + payload_length, app_cid_length.to_be_bytes().to_vec())
-                    .await
-                    .unwrap();
-                machine
-                    .write_memory(MACHINE_IO_ADDRESSS + 32 + cid_length + payload_length, app_cid)
+                    .write_memory(MACHINE_IO_ADDRESSS + 24 + cid_length + payload_length, block_number.to_vec())
                     .await
                     .unwrap();
 
+                let mut block_timestamp = vec![];
 
+                 block_info.timestamp.to_big_endian(&mut block_timestamp);
+
+                machine
+                    .write_memory(MACHINE_IO_ADDRESSS + 32 + cid_length + payload_length, block_timestamp.to_vec())
+                    .await
+                    .unwrap();
+
+                let hash = block_info.hash.0;
+
+                machine
+                    .write_memory(MACHINE_IO_ADDRESSS + 36 + cid_length + payload_length, hash.to_vec())
+                    .await
+                    .unwrap();
             }
             FINISH => {
                 tracing::info!("FINISH");
@@ -206,6 +217,8 @@ pub async fn execute(
                 tracing::info!("LOAD_APP");
 
                 let app_cid = Cid::try_from(app_cid.clone()).unwrap().to_bytes();
+
+                tracing::info!("app cid {:?}", Cid::try_from(app_cid.clone()).unwrap());
                 let cid_length = app_cid.len() as u64;
 
                 machine
@@ -218,6 +231,8 @@ pub async fn execute(
                     .unwrap();
             }
             HINT => {
+                tracing::info!("HINT");
+
                 let payload_length = u64::from_be_bytes(
                 machine
                     .read_memory(
@@ -237,7 +252,7 @@ pub async fn execute(
                         .await
                         .unwrap().try_into().unwrap()
                     );
-                tracing::info!("payload {:?}", payload);
+                tracing::info!("hint payload {:?}", payload);
                     
             }
             _ => {

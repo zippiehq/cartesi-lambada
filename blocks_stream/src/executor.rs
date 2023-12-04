@@ -1,9 +1,14 @@
 use hyper::client::conn::Connection;
+use sequencer::L1BlockInfo;
 use surf_disco::Url;
 type HotShotClient = surf_disco::Client<hotshot_query_service::Error>;
 use cartesi_lambda::execute;
+use cid::Cid;
 use ethers::prelude::*;
+use futures_util::TryStreamExt;
 use hotshot_query_service::availability::BlockQueryData;
+use hyper::Request;
+use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use jsonrpc_cartesi_machine::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
 use sequencer::SeqTypes;
 use std::sync::Arc;
@@ -21,11 +26,8 @@ pub async fn subscribe(
     cartesi_machine_url: String,
     cartesi_machine_path: &str,
     ipfs_url: &str,
-    vm_id: u64,
-    block_height: u64,
     db_dir: String,
-    state_cid: Vec<u8>,
-    app_cid: Vec<u8>,
+    appchain: Vec<u8>,
 ) {
     let ExecutorOptions {
         sequencer_url,
@@ -57,6 +59,72 @@ pub async fn subscribe(
         .await
         .unwrap();
 
+    let ipfs_client = IpfsClient::from_str(ipfs_url).unwrap();
+
+    let chain_info = ipfs_client
+        .cat(&(Cid::try_from(appchain.clone()).unwrap().to_string() + "/app/chain-info.json"))
+        .map_ok(|chunk| chunk.to_vec())
+        .try_concat()
+        .await
+        .unwrap();
+    tracing::info!("chain info len {}", chain_info.len());
+    tracing::info!(
+        "chain info {}",
+        String::from_utf8(chain_info.clone()).unwrap()
+    );
+
+    let chain_info = serde_json::from_slice::<serde_json::Value>(&chain_info)
+        .expect("error reading chain-info.json file");
+
+    let block_height: u64 = chain_info
+        .get("sequencer")
+        .unwrap()
+        .get("height")
+        .unwrap()
+        .as_str().unwrap()
+        .parse::<u64>()
+        .unwrap();
+
+    let chain_vm_id: u64 = chain_info
+        .get("sequencer")
+        .unwrap()
+        .get("vm-id")
+        .unwrap()
+        .as_str().unwrap()
+        .parse::<u64>()
+        .unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "http://127.0.0.1:5001/api/v0/dag/resolve?arg={}/app",
+            Cid::try_from(appchain.clone()).unwrap().to_string()
+        ))
+        .body(hyper::Body::empty())
+        .unwrap();
+
+    let client = hyper::Client::new();
+
+    let mut app_cid = String::new();
+
+    match client.request(req).await {
+        Ok(res) => {
+            let app_cid_value = serde_json::from_slice::<serde_json::Value>(
+                &hyper::body::to_bytes(res).await.expect("no cid").to_vec(),
+            )
+            .unwrap();
+
+            app_cid = app_cid_value
+                .get("Cid")
+                .unwrap()
+                .get("/")
+                .unwrap().as_str().unwrap().to_string();
+        }
+        Err(e) => {
+            panic!("{}", e)
+        }
+    }
+
     let mut block_query_stream = hotshot
         .socket(format!("stream/blocks/{}", block_height).as_str())
         .subscribe()
@@ -64,12 +132,22 @@ pub async fn subscribe(
         .expect("Unable to subscribe to HotShot block stream");
     let mut hash: Vec<u8> = vec![0; 32];
     let exception_err = std::io::Error::new(std::io::ErrorKind::Other, "exception");
-    let mut current_cid: Vec<u8> = state_cid;
+    let mut current_cid: Vec<u8> = appchain;
 
     while let Some(block_data) = block_query_stream.next().await {
         match block_data {
             Ok(block) => {
                 let block: BlockQueryData<SeqTypes> = block;
+
+                let mut block_info: &L1BlockInfo = &L1BlockInfo {
+                    number: 0,
+                    timestamp: U256([0; 4]),
+                    hash: H256([0; 32]),
+                };
+                if let Some(info) = block.block().l1_finalized() {
+                    block_info = info;
+                }
+
                 let height = block.height();
                 //tracing::info!("block height {}", height);
                 let timestamp = block.timestamp().unix_timestamp() as u64;
@@ -93,7 +171,8 @@ pub async fn subscribe(
                         ipfs_url,
                         tx.payload().to_vec(),
                         current_cid.clone(),
-                        app_cid.clone()
+                        app_cid.clone(),
+                        block_info,
                     )
                     .await;
 

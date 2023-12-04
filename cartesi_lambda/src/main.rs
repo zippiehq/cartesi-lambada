@@ -3,18 +3,6 @@ use std::env;
 use std::process::Command;
 #[async_std::main]
 async fn main() {
-    let output = Command::new("sh")
-        .arg("program/gen_machine_simple.sh")
-        .output()
-        .expect("Failed to execute program/gen_machine_simple.sh");
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        tracing::info!("Script output: {}", stdout);
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::info!("Script execution failed: {}", stderr);
-    }
-
     let args: Vec<String> = env::args().collect();
 
     let cartesi_machine_path = args.get(1).unwrap();

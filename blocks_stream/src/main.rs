@@ -16,19 +16,8 @@ use std::process::Command;
 use cid::Cid;
 #[async_std::main]
 async fn main() {
-    let output = Command::new("sh")
-        .arg("program/gen_machine_simple.sh")
-        .output()
-        .expect("Failed to execute program/gen_machine_simple.sh");
     setup_logging();
     setup_backtrace();
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        tracing::info!("Script output: {}", stdout);
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::info!("Script execution failed: {}", stderr);
-    }
 
     let opt = Options::parse();
     let connection = sqlite::open(opt.db_dir.clone()).unwrap();
@@ -40,8 +29,6 @@ async fn main() {
     let cartesi_machine_path = opt.machine_dir.as_str();
     let cartesi_machine_url = "http://127.0.0.1:50051".to_string();
     let ipfs_url = "http://127.0.0.1:5001";
-    let vm_id = opt.vm_id;
-    let min_block_height = opt.height;
 
     let executor_options = ExecutorOptions {
         hotshot_address: opt.hotshot_address,
@@ -61,7 +48,7 @@ async fn main() {
     });
 
     let server = Server::bind(&addr).serve(Box::new(service));
-    let state_cid = Cid::try_from(opt.state_cid).unwrap().to_bytes();
+    let appchain = Cid::try_from(opt.appchain).unwrap().to_bytes();
 
     join!(
         subscribe(
@@ -69,11 +56,8 @@ async fn main() {
             cartesi_machine_url,
             cartesi_machine_path,
             ipfs_url,
-            vm_id,
-            min_block_height,
             opt.db_dir,
-            state_cid,
-            vec![]
+            appchain,
         ),
         server,
     );

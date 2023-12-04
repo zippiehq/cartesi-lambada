@@ -18,18 +18,12 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_DEMO_HOTSHOT_ADDRESS")]
     pub hotshot_address: Address,
 
-    #[clap(long, env = "VM_ID")]
-    pub vm_id: u64,
-
-    #[clap(long, env = "HEIGHT")]
-    pub height: u64,
-
     #[clap(long, env = "MACHINE_DIR")]
     pub machine_dir: String,
 
     #[clap(long, env = "DB_DIR", default_value = "sequencer_db")]
     pub db_dir: String,
 
-    #[clap(long, env = "STATE_CID")]
-    pub state_cid: String,
+    #[clap(long, env = "APPCHAIN")]
+    pub appchain: String,
 }

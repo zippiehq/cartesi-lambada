@@ -15,20 +15,8 @@ use sqlite::State;
 
 #[async_std::main]
 async fn main() {
-    let output = Command::new("sh")
-        .arg("program/gen_machine_simple.sh")
-        .output()
-        .expect("Failed to execute program/gen_machine_simple.sh");
     setup_logging();
     setup_backtrace();
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        tracing::info!("Script output: {}", stdout);
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::info!("Script execution failed: {}", stderr);
-    }
-
     let opt = Options::parse();
     let connection = sqlite::open(opt.db_dir.clone()).unwrap();
     let query = "
