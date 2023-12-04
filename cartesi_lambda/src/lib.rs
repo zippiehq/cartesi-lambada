@@ -123,7 +123,7 @@ pub async fn execute(
                     .await
                     .unwrap();
 
-                let mut block_timestamp = vec![];
+                let mut block_timestamp = vec![0; 32];
 
                  block_info.timestamp.to_big_endian(&mut block_timestamp);
 
@@ -135,7 +135,7 @@ pub async fn execute(
                 let hash = block_info.hash.0;
 
                 machine
-                    .write_memory(MACHINE_IO_ADDRESSS + 36 + cid_length + payload_length, hash.to_vec())
+                    .write_memory(MACHINE_IO_ADDRESSS + 32 + block_timestamp.len() as u64 + cid_length + payload_length, hash.to_vec())
                     .await
                     .unwrap();
             }

@@ -29,9 +29,9 @@ RUN apt-get install -y pkg-config
 #COPY --from=build-emulator / /
 
 RUN apt-get install wget
-RUN wget https://dist.ipfs.io/go-ipfs/v0.9.0/go-ipfs_v0.9.0_linux-amd64.tar.gz
-RUN tar -xvzf go-ipfs_v0.9.0_linux-amd64.tar.gz
-RUN bash go-ipfs/install.sh
+RUN wget https://github.com/ipfs/kubo/releases/download/v0.24.0/kubo_v0.24.0_linux-amd64.tar.gz
+RUN tar -xvzf kubo_v0.24.0_linux-amd64.tar.gz
+RUN bash kubo/install.sh
 
 RUN ipfs init --profile=server
 
@@ -43,8 +43,8 @@ RUN apt-get update && \
 RUN apt-get install -y pkg-config
 RUN apt-get install -y openssl
 RUN apt-get install libssl-dev
-COPY target/release/blocks_stream /bin/blocks_stream
-COPY target/release/blocks_stream_celestia /bin/blocks_stream_celestia
-COPY target/release/cartesi_lambda /bin/cartesi_lambda
+COPY target/debug/blocks_stream /bin/blocks_stream
+COPY target/debug/blocks_stream_celestia /bin/blocks_stream_celestia
+COPY target/debug/cartesi_lambda /bin/cartesi_lambda
 COPY ./state /state
-CMD sh -c "ipfs daemon & sleep 10 && ipfs add --cid-version=1 -r -Q /state && /usr/bin/jsonrpc-remote-cartesi-machine --server-address=127.0.0.1:50051 & sleep 15 && RUST_LOG=info /bin/blocks_stream --sequencer-url https://query.cortado.espresso.network/  --l1-provider wss://eth-sepolia.g.alchemy.com/v2/ynVGpb2sD3HhbMBR4aGbYTw5Sd2aLUQh --hotshot-address 0xed15e1fe0789c524398137a066ceb2ef9884e5d8 --machine-dir /machines/ipfs-using2 --appchain bafybeiato4fpstvtmrlurbznkqm5qb4bbnpfcsbw4msrgdkb3mu3lkopaq"
+CMD sh -c "ipfs daemon & sleep 10 && ipfs add --cid-version=1 -r /state && /usr/bin/jsonrpc-remote-cartesi-machine --server-address=127.0.0.1:50051 & sleep 15 && RUST_LOG=info RUST_BACKTRACE=full /bin/blocks_stream --sequencer-url https://query.cortado.espresso.network/  --l1-provider wss://eth-sepolia.g.alchemy.com/v2/ynVGpb2sD3HhbMBR4aGbYTw5Sd2aLUQh --hotshot-address 0xed15e1fe0789c524398137a066ceb2ef9884e5d8 --machine-dir /machines/ipfs-using2 --appchain bafybeic7hr2bn6xe6fzylxv3arvcjlhcnrnvt7hka3jq3mnn53paoxlsga"
