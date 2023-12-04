@@ -24,7 +24,8 @@ pub async fn subscribe(
     vm_id: u64,
     block_height: u64,
     db_dir: String,
-    state_cid: Vec<u8>
+    state_cid: Vec<u8>,
+    app_cid: Vec<u8>,
 ) {
     let ExecutorOptions {
         sequencer_url,
@@ -70,7 +71,7 @@ pub async fn subscribe(
             Ok(block) => {
                 let block: BlockQueryData<SeqTypes> = block;
                 let height = block.height();
-                tracing::info!("block height {}", height);
+                //tracing::info!("block height {}", height);
                 let timestamp = block.timestamp().unix_timestamp() as u64;
                 hash = block.hash().into_bits().into_vec();
 
@@ -78,34 +79,37 @@ pub async fn subscribe(
                     hash = block.hash().into_bits().into_vec();
                 }
                 for (index, tx) in block.block().transactions().into_iter().enumerate() {
-                    if u64::from(tx.vm()) as u64 == vm_id {
-                        tracing::info!("found tx for our vm id");
-                        tracing::info!("tx.payload().len: {:?}", tx.payload().len());
-                        let forked_machine_url =
-                            format!("http://{}", machine.fork().await.unwrap());
-                        let mut machine = JsonRpcCartesiMachineClient::new(forked_machine_url)
-                            .await
-                            .unwrap();
-                        let connection = sqlite::open(db_dir.clone()).unwrap();
+                    //if u64::from(tx.vm()) as u64 == vm_id {
+                    tracing::info!("found tx for our vm id");
+                    tracing::info!("tx.payload().len: {:?}", tx.payload().len());
+                    let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
+                    let mut machine = JsonRpcCartesiMachineClient::new(forked_machine_url)
+                        .await
+                        .unwrap();
+                    let connection = sqlite::open(db_dir.clone()).unwrap();
 
-                        let result = execute(&mut machine, ipfs_url, tx.payload().to_vec(), current_cid.clone()).await;
-                        if let Ok(cid) = result {
-                            current_cid = cid;
-                        }
-                        else if let Some(exception_err) = result.as_ref().err() {
-                            current_cid = execute(&mut machine, ipfs_url, tx.payload().to_vec(), current_cid).await.unwrap();
-                        }
-                        else {
-                            result.unwrap();
-                        }
+                    let result = execute(
+                        &mut machine,
+                        ipfs_url,
+                        tx.payload().to_vec(),
+                        current_cid.clone(),
+                        app_cid.clone()
+                    )
+                    .await;
+
+                    if let Ok(cid) = result {
+                        current_cid = cid;
+                    } else {
+                        result.unwrap();
                     }
+                    //}
                 }
-                let mut statement = connection
+                /*let mut statement = connection
                     .prepare("INSERT INTO blocks (hash, height) VALUES (?, ?)")
                     .unwrap();
                 statement.bind((1, &hash as &[u8])).unwrap();
                 statement.bind((2, height as i64)).unwrap();
-                statement.next().unwrap();
+                statement.next().unwrap();*/
             }
             Err(err) => {
                 tracing::error!("Error in HotShot block stream, retrying: {err}");

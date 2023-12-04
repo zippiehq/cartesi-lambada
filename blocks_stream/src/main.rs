@@ -72,7 +72,8 @@ async fn main() {
             vm_id,
             min_block_height,
             opt.db_dir,
-            state_cid
+            state_cid,
+            vec![]
         ),
         server,
     );
