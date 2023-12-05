@@ -2,7 +2,9 @@ use futures::TryStreamExt;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 
 use cid::Cid;
-use jsonrpc_cartesi_machine::JsonRpcCartesiMachineClient;
+use cartesi_machine_json_rpc::client::JsonRpcCartesiMachineClient; 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use serde_json::Value;
 use std::io::Cursor;
 use sequencer::L1BlockInfo;
@@ -36,8 +38,6 @@ pub async fn execute(
                 .await
                 .unwrap(),
         );
-
-        tracing::info!("hex encoded data {:?}", hex_encoded);
 
         let read_opt_be_bytes = machine.read_memory(MACHINE_IO_ADDRESSS, 8).await.unwrap();
         let opt = u64::from_be_bytes(read_opt_be_bytes.try_into().unwrap());
@@ -73,11 +73,11 @@ pub async fn execute(
                 tracing::info!("block len {:?}", block.len());
 
                 machine
-                    .write_memory(MACHINE_IO_ADDRESSS + 16, block.clone())
+                    .write_memory(MACHINE_IO_ADDRESSS + 16,  STANDARD.encode(block.clone()))
                     .await
                     .unwrap();
                 machine
-                    .write_memory(MACHINE_IO_ADDRESSS, block.len().to_be_bytes().to_vec())
+                    .write_memory(MACHINE_IO_ADDRESSS,  STANDARD.encode(block.len().to_be_bytes().to_vec()))
                     .await
                     .unwrap();
             }
@@ -94,11 +94,11 @@ pub async fn execute(
                 let cid_length = current_cid.len() as u64;
 
                 machine
-                    .write_memory(MACHINE_IO_ADDRESSS, cid_length.to_be_bytes().to_vec())
+                    .write_memory(MACHINE_IO_ADDRESSS,  STANDARD.encode(cid_length.to_be_bytes().to_vec()))
                     .await
                     .unwrap();
                 machine
-                    .write_memory(MACHINE_IO_ADDRESSS + 8, current_cid)
+                    .write_memory(MACHINE_IO_ADDRESSS + 8,  STANDARD.encode(current_cid))
                     .await
                     .unwrap();
 
@@ -107,19 +107,19 @@ pub async fn execute(
                 machine
                     .write_memory(
                         MACHINE_IO_ADDRESSS + 16 + cid_length,
-                        payload_length.to_be_bytes().to_vec(),
+                        STANDARD.encode(payload_length.to_be_bytes().to_vec()),
                     )
                     .await
                     .unwrap();
                 machine
-                    .write_memory(MACHINE_IO_ADDRESSS + 24 + cid_length, payload.clone())
+                    .write_memory(MACHINE_IO_ADDRESSS + 24 + cid_length,  STANDARD.encode(payload.clone()))
                     .await
                     .unwrap();
 
                 let block_number = block_info.number.to_be_bytes();
 
                 machine
-                    .write_memory(MACHINE_IO_ADDRESSS + 24 + cid_length + payload_length, block_number.to_vec())
+                    .write_memory(MACHINE_IO_ADDRESSS + 24 + cid_length + payload_length,  STANDARD.encode(block_number.to_vec()))
                     .await
                     .unwrap();
 
@@ -128,14 +128,14 @@ pub async fn execute(
                  block_info.timestamp.to_big_endian(&mut block_timestamp);
 
                 machine
-                    .write_memory(MACHINE_IO_ADDRESSS + 32 + cid_length + payload_length, block_timestamp.to_vec())
+                    .write_memory(MACHINE_IO_ADDRESSS + 32 + cid_length + payload_length,  STANDARD.encode(block_timestamp.to_vec()))
                     .await
                     .unwrap();
 
                 let hash = block_info.hash.0;
 
                 machine
-                    .write_memory(MACHINE_IO_ADDRESSS + 32 + block_timestamp.len() as u64 + cid_length + payload_length, hash.to_vec())
+                    .write_memory(MACHINE_IO_ADDRESSS + 32 + block_timestamp.len() as u64 + cid_length + payload_length,  STANDARD.encode(hash.to_vec()))
                     .await
                     .unwrap();
             }
@@ -222,11 +222,11 @@ pub async fn execute(
                 let cid_length = app_cid.len() as u64;
 
                 machine
-                    .write_memory(MACHINE_IO_ADDRESSS, cid_length.to_be_bytes().to_vec())
+                    .write_memory(MACHINE_IO_ADDRESSS,  STANDARD.encode(cid_length.to_be_bytes().to_vec()))
                     .await
                     .unwrap();
                 machine
-                    .write_memory(MACHINE_IO_ADDRESSS + 8, app_cid)
+                    .write_memory(MACHINE_IO_ADDRESSS + 8,  STANDARD.encode(app_cid))
                     .await
                     .unwrap();
             }
@@ -264,6 +264,6 @@ pub async fn execute(
             machine.destroy().await.unwrap();
             machine.shutdown().await.unwrap();
         }
-        machine.reset_iflags_y().await.unwrap()
+        machine.reset_iflags_y().await.unwrap();
     }
 }

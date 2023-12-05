@@ -9,7 +9,7 @@ use futures_util::TryStreamExt;
 use hotshot_query_service::availability::BlockQueryData;
 use hyper::Request;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
-use jsonrpc_cartesi_machine::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
+use cartesi_machine_json_rpc::client::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
 use sequencer::SeqTypes;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -60,6 +60,8 @@ pub async fn subscribe(
         .unwrap();
 
     let ipfs_client = IpfsClient::from_str(ipfs_url).unwrap();
+
+    tracing::info!("getting chain info");
 
     let chain_info = ipfs_client
         .cat(&(Cid::try_from(appchain.clone()).unwrap().to_string() + "/app/chain-info.json"))

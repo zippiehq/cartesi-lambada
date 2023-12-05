@@ -1,4 +1,4 @@
-use jsonrpc_cartesi_machine::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
+use cartesi_machine_json_rpc::client::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
 use std::env;
 use std::process::Command;
 #[async_std::main]
