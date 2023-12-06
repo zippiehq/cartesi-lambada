@@ -156,7 +156,22 @@ pub async fn execute(
             }
             LOAD_TX => {
                 tracing::info!("LOAD_TX");
+                let app_cid: cid::CidGeneric<64> = Cid::try_from(app_cid.clone()).unwrap();
+                tracing::info!(
+                    "load tx to dir: {}",
+                    format!(
+                        "/data/snapshot/ipfs_using2_{}",
+                        app_cid.clone().to_string(),
+                    )
+                );
 
+                machine
+                    .store(&format!(
+                        "/data/snapshot/ipfs_using2_{}",
+                        app_cid.clone().to_string(),
+                    ))
+                    .await
+                    .unwrap();
                 let current_cid = Cid::try_from(state_cid.clone()).unwrap();
                 let cid_length = current_cid.clone().to_bytes().len() as u64;
 
@@ -227,22 +242,6 @@ pub async fn execute(
                     )
                     .await
                     .unwrap();
-                let app_cid: cid::CidGeneric<64> = Cid::try_from(app_cid.clone()).unwrap();
-                tracing::info!(
-                    "load tx to dir: {}",
-                    format!(
-                        "/data/snapshot/ipfs_using2_{}",
-                        app_cid.clone().to_string(),
-                    )
-                );
-
-                machine
-                    .store(&format!(
-                        "/data/snapshot/ipfs_using2_{}",
-                        app_cid.clone().to_string(),
-                    ))
-                    .await
-                    .unwrap();
             }
             FINISH => {
                 tracing::info!("FINISH");
@@ -276,6 +275,8 @@ pub async fn execute(
                         println!("HTIF_YIELD_REASON_RX_ACCEPTED");
                         machine.destroy().await.unwrap();
                         machine.shutdown().await.unwrap();
+                        tracing::info!("FINISH received cid {}", Cid::try_from(data.clone()).unwrap());
+
                         return Ok(data);
                     }
                     1 => {
@@ -320,6 +321,13 @@ pub async fn execute(
             }
             LOAD_APP => {
                 tracing::info!("LOAD_APP");
+                tracing::info!(
+                    "load app to dir: /data/snapshot/ipfs_using2"
+                );
+                machine
+                    .store("/data/snapshot/ipfs_using2")
+                    .await
+                    .unwrap();
 
                 let app_cid: cid::CidGeneric<64> = Cid::try_from(app_cid.clone()).unwrap();
 
@@ -338,13 +346,6 @@ pub async fn execute(
                         MACHINE_IO_ADDRESSS + 8,
                         STANDARD.encode(app_cid.clone().to_bytes()),
                     )
-                    .await
-                    .unwrap();
-                tracing::info!(
-                    "load app to dir: /data/snapshot/ipfs_using2"
-                );
-                machine
-                    .store("/data/snapshot/ipfs_using2")
                     .await
                     .unwrap();
             }

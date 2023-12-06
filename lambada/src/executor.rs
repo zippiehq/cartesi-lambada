@@ -186,8 +186,11 @@ pub async fn subscribe(
                             )
                             .await;
 
+
                             if let Ok(cid) = result {
+                                tracing::info!("old current_cid {:?}", Cid::try_from(current_cid.clone()).unwrap().to_string());
                                 current_cid = cid;
+                                tracing::info!("resulted current_cid {:?}", Cid::try_from(current_cid.clone()).unwrap().to_string());
                             } else {
                                 //TODO
                                 panic!("execute failed");
