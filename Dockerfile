@@ -46,5 +46,8 @@ RUN apt-get install libssl-dev
 COPY target/debug/blocks_stream /bin/blocks_stream
 COPY target/debug/blocks_stream_celestia /bin/blocks_stream_celestia
 COPY target/debug/cartesi_lambda /bin/cartesi_lambda
+COPY target/debug/lambada /bin/lambada
 COPY ./state /state
-CMD sh -c "ipfs daemon & sleep 30 && ipfs add --cid-version=1 -r /state && /usr/bin/jsonrpc-remote-cartesi-machine --server-address=127.0.0.1:50051 & sleep 60 && RUST_LOG=info RUST_BACKTRACE=full /bin/blocks_stream --sequencer-url https://query.cortado.espresso.network/  --l1-provider wss://eth-sepolia.g.alchemy.com/v2/ynVGpb2sD3HhbMBR4aGbYTw5Sd2aLUQh --hotshot-address 0xed15e1fe0789c524398137a066ceb2ef9884e5d8 --machine-dir /machines/ipfs-using2 --appchain bafybeietvxuf5ymb4la6ctbso2qmp4zg5n7jljkn6icalmjkk5ee6pmytm"
+RUN mkdir /data
+RUN mkdir /data/snapshot
+CMD sh -c "ipfs daemon & sleep 30 && ipfs add --cid-version=1 -r /state && /usr/bin/jsonrpc-remote-cartesi-machine --server-address=127.0.0.1:50051 & sleep 60 && RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --sequencer-url https://query.cortado.espresso.network/  --l1-provider wss://eth-sepolia.g.alchemy.com/v2/ynVGpb2sD3HhbMBR4aGbYTw5Sd2aLUQh --hotshot-address 0xed15e1fe0789c524398137a066ceb2ef9884e5d8 --machine-dir /machines/ipfs-using2 --appchain bafybeietvxuf5ymb4la6ctbso2qmp4zg5n7jljkn6icalmjkk5ee6pmytm"
