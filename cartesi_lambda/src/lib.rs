@@ -41,9 +41,6 @@ pub async fn execute(
         "state_cid {}",
         Cid::try_from(state_cid.clone()).unwrap().to_string()
     );
-    let path = std::path::Path::new(&"/data/snapshot");
-    println!("exists?: {}", path.exists());
-    println!("is_dir?: {}", path.is_dir());
 
     let mut machine_loaded_state = 0;
 
@@ -98,10 +95,11 @@ pub async fn execute(
             .unwrap();
     }
 
-    machine.reset_iflags_y().await.unwrap();
-
     loop {
-        let interpreter_break_reason = machine.run(u64::MAX).await.unwrap();
+        let mut interpreter_break_reason =  Value::Null;
+        if !machine.read_iflags_y().await.unwrap() {
+            interpreter_break_reason = machine.run(u64::MAX).await.unwrap();
+        }
         let hex_encoded = hex::encode(
             machine
                 .read_memory(MACHINE_IO_ADDRESSS, 1024)
@@ -153,6 +151,8 @@ pub async fn execute(
                     )
                     .await
                     .unwrap();
+                tracing::info!("read_block info was written");
+
             }
             EXCEPTION => {
                 tracing::info!("HTIF_YIELD_REASON_TX_EXCEPTION");
@@ -162,11 +162,13 @@ pub async fn execute(
             }
             LOAD_TX => {
                 tracing::info!("LOAD_TX");
-                if machine_loaded_state == 0 ||  machine_loaded_state == 1{
+                if machine_loaded_state == 0 || machine_loaded_state == 1 {
+                
                     let app_cid: cid::CidGeneric<64> = Cid::try_from(app_cid.clone()).unwrap();
                     tracing::info!(
-                        "load tx to dir: {}",
-                        format!("/data/snapshot/ipfs_using2_{}", app_cid.clone().to_string(),)
+                        "load tx to dir: {} and read iflag : {}",
+                        format!("/data/snapshot/ipfs_using2_{}", app_cid.clone().to_string()),
+                        machine.read_iflags_y().await.unwrap()
                     );
 
                     machine
@@ -247,6 +249,8 @@ pub async fn execute(
                     )
                     .await
                     .unwrap();
+
+                tracing::info!("load_tx info was written");
             }
             FINISH => {
                 tracing::info!("FINISH");
@@ -330,7 +334,7 @@ pub async fn execute(
             LOAD_APP => {
                 tracing::info!("LOAD_APP");
                 if machine_loaded_state == 0 {
-                    tracing::info!("load app to dir: /data/snapshot/ipfs_using2");
+                    tracing::info!("load app to dir: /data/snapshot/ipfs_using2 and read iflag : {}", machine.read_iflags_y().await.unwrap());
                     machine.store("/data/snapshot/ipfs_using2").await.unwrap();
                 }
                 let app_cid: cid::CidGeneric<64> = Cid::try_from(app_cid.clone()).unwrap();
@@ -352,6 +356,8 @@ pub async fn execute(
                     )
                     .await
                     .unwrap();
+                tracing::info!("load_app info was written");
+
             }
             HINT => {
                 tracing::info!("HINT");
