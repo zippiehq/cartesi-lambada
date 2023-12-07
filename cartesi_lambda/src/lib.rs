@@ -81,7 +81,6 @@ pub async fn execute(
             .await
             .unwrap();
         machine_loaded_state = 1;
-        tracing::info!("read iflag y {:?}", machine.read_iflags_y().await.unwrap());
     } else {
         machine
             .load_machine(
@@ -109,6 +108,7 @@ pub async fn execute(
 
         let read_opt_be_bytes = machine.read_memory(MACHINE_IO_ADDRESSS, 8).await.unwrap();
         let opt = u64::from_be_bytes(read_opt_be_bytes.try_into().unwrap());
+        tracing::info!("before handling iflag y {:?}", machine.read_iflags_y().await.unwrap());
 
         match opt {
             READ_BLOCK => {

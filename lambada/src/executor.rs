@@ -135,8 +135,6 @@ pub async fn subscribe(
     while let Some(block_data) = block_query_stream.next().await {
         match block_data {
             Ok(block) => {
-                tracing::info!("received new block");
-
                 let block: BlockQueryData<SeqTypes> = block;
 
                 let mut block_info: &L1BlockInfo = &L1BlockInfo {
