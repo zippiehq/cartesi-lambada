@@ -10,6 +10,7 @@ use serde_json::Value;
 use sqlite::State;
 use std::fs::File;
 use std::io::Cursor;
+use hyper::Request;
 
 pub const MACHINE_IO_ADDRESSS: u64 = 0x90000000000000;
 const READ_BLOCK: u64 = 0x00001;
@@ -26,9 +27,45 @@ pub async fn execute(
     ipfs_url: &str,
     payload: Vec<u8>,
     state_cid: Vec<u8>,
-    app_cid: String,
     block_info: &L1BlockInfo,
 ) -> Result<Vec<u8>, std::io::Error> {
+
+    tracing::info!("state cid {:?}", Cid::try_from(state_cid.clone()).unwrap().to_string());
+
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "http://127.0.0.1:5001/api/v0/dag/resolve?arg={}/app",
+            Cid::try_from(state_cid.clone()).unwrap().to_string()
+        ))
+        .body(hyper::Body::empty())
+        .unwrap();
+
+    let mut app_cid = String::new();
+    let client = hyper::Client::new();
+
+    match client.request(req).await {
+        Ok(res) => {
+            let app_cid_value = serde_json::from_slice::<serde_json::Value>(
+                &hyper::body::to_bytes(res).await.expect("no cid").to_vec(),
+            )
+            .unwrap();
+
+            app_cid = app_cid_value
+                .get("Cid")
+                .unwrap()
+                .get("/")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string();
+        }
+        Err(e) => {
+            panic!("{}", e)
+        }
+    }
+    tracing::info!("app cid {:?}", Cid::try_from(app_cid.clone()).unwrap().to_string());
+
     let client = IpfsClient::from_str(ipfs_url).unwrap();
     tracing::info!("execute");
 
@@ -327,9 +364,11 @@ pub async fn execute(
                     .await
                     .unwrap();
 
-                let data = Cursor::new(memory);
+                let data = Cursor::new(memory.clone());
+                tracing::info!("data written to block {:?}", memory.clone());
+                let put_response = client.block_put(data).await.unwrap();
+                tracing::info!("put_response key {:?}", put_response.key);
 
-                client.block_put(data).await.unwrap();
             }
             LOAD_APP => {
                 tracing::info!("LOAD_APP");

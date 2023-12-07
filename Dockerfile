@@ -43,8 +43,6 @@ RUN apt-get update && \
 RUN apt-get install -y pkg-config
 RUN apt-get install -y openssl
 RUN apt-get install libssl-dev
-COPY target/debug/blocks_stream /bin/blocks_stream
-COPY target/debug/blocks_stream_celestia /bin/blocks_stream_celestia
 COPY target/debug/cartesi_lambda /bin/cartesi_lambda
 COPY target/debug/lambada /bin/lambada
 COPY ./state /state

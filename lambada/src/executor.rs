@@ -89,40 +89,6 @@ pub async fn subscribe(
         .parse::<u64>()
         .unwrap();
 
-    let req = Request::builder()
-        .method("POST")
-        .uri(format!(
-            "http://127.0.0.1:5001/api/v0/dag/resolve?arg={}/app",
-            Cid::try_from(appchain.clone()).unwrap().to_string()
-        ))
-        .body(hyper::Body::empty())
-        .unwrap();
-
-    let client = hyper::Client::new();
-
-    let mut app_cid = String::new();
-
-    match client.request(req).await {
-        Ok(res) => {
-            let app_cid_value = serde_json::from_slice::<serde_json::Value>(
-                &hyper::body::to_bytes(res).await.expect("no cid").to_vec(),
-            )
-            .unwrap();
-
-            app_cid = app_cid_value
-                .get("Cid")
-                .unwrap()
-                .get("/")
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .to_string();
-        }
-        Err(e) => {
-            panic!("{}", e)
-        }
-    }
-
     let mut block_query_stream = hotshot
         .socket(format!("stream/blocks/{}", height).as_str())
         .subscribe()
@@ -179,7 +145,6 @@ pub async fn subscribe(
                                 ipfs_url,
                                 tx.payload().to_vec(),
                                 current_cid.clone(),
-                                app_cid.clone(),
                                 block_info,
                             )
                             .await;
