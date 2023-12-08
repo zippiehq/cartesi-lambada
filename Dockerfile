@@ -23,7 +23,6 @@ RUN tar -xvzf kubo_v0.24.0_linux-amd64.tar.gz
 RUN bash kubo/install.sh && rm -rf kubo
 
 COPY --from=zippiehq/cartesi-lambada-base-image:1.0 /lambada-base-machine.tar.gz /lambada-base-machine.tar.gz
-RUN curl -LO https://web3.link/bafybeietvxuf5ymb4la6ctbso2qmp4zg5n7jljkn6icalmjkk5ee6pmytm.car.gz
 COPY --from=build /build/target/release/lambada /bin/lambada
 COPY ./entrypoint.sh /entrypoint.sh
 COPY ./sample /sample

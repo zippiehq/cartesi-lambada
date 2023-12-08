@@ -3,7 +3,6 @@ if [ x$IPFS_URL = x ]; then
    echo "Running container-local IPFS instance"
   if [ ! -e /data/ipfs ]; then
     IPFS_PATH=/data/ipfs ipfs init --profile=server
-    gzip -dc /bafybeietvxuf5ymb4la6ctbso2qmp4zg5n7jljkn6icalmjkk5ee6pmytm.car.gz | IPFS_PATH=/data/ipfs ipfs dag import
   fi
 
   IPFS_PATH=/data/ipfs ipfs daemon &
@@ -68,7 +67,7 @@ if [ x$SEQUENCER_URL = x ]; then
 fi
 
 if [ x$APPCHAIN = x ]; then
-   echo -n "No appchain specified and not in compute only mode -- sample app: bafybeietvxuf5ymb4la6ctbso2qmp4zg5n7jljkn6icalmjkk5ee6pmytm"
+   echo -n "No appchain specified and not in compute only mode"
    exit 1
 fi
 

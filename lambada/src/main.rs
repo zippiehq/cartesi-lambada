@@ -198,7 +198,8 @@ async fn request_handler(
         (hyper::Method::POST, ["submit"]) => {
             let https = HttpsConnector::new();
             let client = Client::builder().build::<_, hyper::Body>(https);
-            let uri = "https://query.cortado.espresso.network/submit/submit"
+            
+            let uri = format!("{}submit/submit", options.sequencer_url.clone())
                 .parse()
                 .unwrap();
 
