@@ -26,4 +26,7 @@ pub struct Options {
 
     #[clap(long, env = "APPCHAIN")]
     pub appchain: String,
+
+    #[clap(long, env = "COMPUTE_ONLY")]
+    pub compute_only: bool,
 }
