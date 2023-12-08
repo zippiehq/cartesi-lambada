@@ -70,14 +70,6 @@ pub async fn execute(
     tracing::info!("execute");
 
     let mut machine = JsonRpcCartesiMachineClient::new(machine_url).await.unwrap();
-    tracing::info!(
-        "app_cid {}",
-        Cid::try_from(app_cid.clone()).unwrap().to_string()
-    );
-    tracing::info!(
-        "state_cid {}",
-        Cid::try_from(state_cid.clone()).unwrap().to_string()
-    );
 
     let mut machine_loaded_state = 0;
 
