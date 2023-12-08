@@ -10,14 +10,6 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_URL")]
     pub sequencer_url: Url,
 
-    /// URL of layer 1 Ethereum JSON-RPC provider.
-    #[clap(long, env = "ESPRESSO_DEMO_L1_PROVIDER")]
-    pub l1_provider: Url,
-
-    /// Address of HotShot contract on layer 1.
-    #[clap(long, env = "ESPRESSO_DEMO_HOTSHOT_ADDRESS")]
-    pub hotshot_address: Address,
-
     #[clap(long, env = "MACHINE_DIR")]
     pub machine_dir: String,
 

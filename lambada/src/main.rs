@@ -33,8 +33,6 @@ async fn main() {
     let ipfs_url = "http://127.0.0.1:5001";
 
     let executor_options = ExecutorOptions {
-        hotshot_address: opt.hotshot_address,
-        l1_provider: opt.l1_provider.clone(),
         sequencer_url: opt.sequencer_url.clone(),
     };
     let addr = ([0, 0, 0, 0], 3033).into();
@@ -117,8 +115,14 @@ async fn request_handler(
 
                 match new_state_cid {
                     Ok(cid) => {
+                        let json_response = serde_json::json!({
+                            "cid": Cid::try_from(cid).unwrap().to_string(),
+                        });
+                        let json_response = serde_json::to_string(&json_response).unwrap();
+
                         let response =
-                            Response::new(Body::from(Cid::try_from(cid).unwrap().to_string()));
+                            Response::new(Body::from(json_response));
+
                         return Ok(response);
                     }
                     Err(e) => {

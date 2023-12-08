@@ -16,13 +16,12 @@ use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::{Duration, SystemTime};
 
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;
 #[derive(Clone, Debug)]
 pub struct ExecutorOptions {
     pub sequencer_url: Url,
-    pub l1_provider: Url,
-    pub hotshot_address: Address,
 }
 
 pub async fn subscribe(
@@ -38,8 +37,6 @@ pub async fn subscribe(
 
     let ExecutorOptions {
         sequencer_url,
-        l1_provider: _,
-        hotshot_address: _,
     } = opt;
     let connection = sqlite::open(db_dir.clone()).unwrap();
 
@@ -138,6 +135,7 @@ pub async fn subscribe(
                                 format!("http://{}", machine.fork().await.unwrap());
 
                             let connection = sqlite::open(db_dir.clone()).unwrap();
+                            let time_before_execute = SystemTime::now();
 
                             let result = execute(
                                 forked_machine_url,
@@ -148,6 +146,9 @@ pub async fn subscribe(
                                 block_info,
                             )
                             .await;
+                            let time_after_execute = SystemTime::now();
+
+                            tracing::info!("executing time {}", time_after_execute.duration_since(time_before_execute).unwrap().as_millis());
 
 
                             if let Ok(cid) = result {
