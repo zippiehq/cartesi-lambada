@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use sqlite::State;
 use std::fmt::format;
 use std::process::Command;
+use std::sync::Arc;
 
 #[async_std::main]
 async fn main() {
@@ -28,31 +29,39 @@ async fn main() {
     height INTEGER NOT NULL);
 ";
     connection.execute(query).unwrap();
-    let cartesi_machine_path = opt.machine_dir.as_str();
-    let cartesi_machine_url = opt.cartesi_machine_url;
-
-    let ipfs_url = opt.ipfs_url.as_str();
+    let cartesi_machine_path = opt.machine_dir.clone();
+    let cartesi_machine_url = opt.cartesi_machine_url.clone();
+    let db_dir = opt.db_dir.clone();
+    let compute_only = opt.compute_only.clone();
+    let appchain = opt.appchain.clone();
+    let ipfs_url = opt.ipfs_url.clone();
 
     let executor_options = ExecutorOptions {
         sequencer_url: opt.sequencer_url.clone(),
     };
     let addr = ([0, 0, 0, 0], 3033).into();
 
-    let service = make_service_fn(|_| async move {
-        Ok::<_, hyper::Error>(service_fn(|req| async {
-            let path = req.uri().path().to_owned();
-            let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-            let output = request_handler(req, &segments).await;
-            match output {
-                Ok(res) => Ok(res),
-                Err(e) => Err(e.to_string()),
-            }
-        }))
+    let context = Arc::new(opt);
+    let service = make_service_fn(|_| {
+        let options = Arc::clone(&context);
+        async move {
+            Ok::<_, hyper::Error>(service_fn(move |req| {
+                let options = Arc::clone(&options);
+                async move {
+                    let path = req.uri().path().to_owned();
+                    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+                    let output = request_handler(req, &segments, options).await;
+                    match output {
+                        Ok(res) => Ok(res),
+                        Err(e) => Err(e.to_string()),
+                    }
+                }
+            }))
+        }
     });
 
     let server = Server::bind(&addr).serve(Box::new(service));
-    let appchain = Cid::try_from(opt.appchain).unwrap().to_bytes();
-    let compute_only = opt.compute_only;
+    let appchain = Cid::try_from(appchain).unwrap().to_bytes();
     if compute_only {
         tracing::info!("Compute only");
         server.await;
@@ -63,9 +72,9 @@ async fn main() {
             subscribe(
                 &executor_options,
                 cartesi_machine_url,
-                cartesi_machine_path,
-                ipfs_url,
-                opt.db_dir,
+                cartesi_machine_path.as_str(),
+                ipfs_url.as_str(),
+                db_dir,
                 appchain,
                 0,
             ),
@@ -77,6 +86,7 @@ async fn main() {
 async fn request_handler(
     reqest: Request<Body>,
     segments: &[&str],
+    options: Arc<lambada::Options>,
 ) -> Result<Response<Body>, Box<dyn std::error::Error + 'static>> {
     match (reqest.method().clone(), segments) {
         (hyper::Method::POST, ["compute", cid]) => {
@@ -89,15 +99,15 @@ async fn request_handler(
                     .await
                     .unwrap()
                     .to_vec();
-                let connection = sqlite::open("sequencer_db").unwrap();
-                let cartesi_machine_path = "/machines/ipfs-using2";
+                let cartesi_machine_url = options.cartesi_machine_url.clone();
+                let ipfs_url = options.ipfs_url.as_str();
+                let connection = sqlite::open(options.db_dir.clone()).unwrap();
+                let cartesi_machine_path = options.machine_dir.as_str();
 
-                let cartesi_machine_url = "http://127.0.0.1:50051".to_string();
                 let mut machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url)
                     .await
                     .unwrap();
                 let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
-                let ipfs_url = "http://127.0.0.1:5001";
                 let state_cid = Cid::try_from(cid.to_string()).unwrap().to_bytes();
                 let mut block_info: &L1BlockInfo = &L1BlockInfo {
                     number: 0,
@@ -121,8 +131,7 @@ async fn request_handler(
                         });
                         let json_response = serde_json::to_string(&json_response).unwrap();
 
-                        let response =
-                            Response::new(Body::from(json_response));
+                        let response = Response::new(Body::from(json_response));
 
                         return Ok(response);
                     }
