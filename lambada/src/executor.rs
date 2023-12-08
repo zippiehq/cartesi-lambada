@@ -123,10 +123,9 @@ pub async fn subscribe(
                 statement.bind((1, height as i64)).unwrap();
 
                 if let Ok(state) = statement.next() {
-                    tracing::info!("statement next");
                     if state == State::Done {
                         for (index, tx) in block.block().transactions().into_iter().enumerate() {
-                            //if u64::from(tx.vm()) as u64 == vm_id {
+                            if u64::from(tx.vm()) as u64 == chain_vm_id {
                             tracing::info!("found tx for our vm id");
                             tracing::info!("tx.payload().len: {:?}", tx.payload().len());
 
@@ -165,7 +164,7 @@ pub async fn subscribe(
                             statement.bind((1, &current_cid as &[u8])).unwrap();
                             statement.bind((2, height as i64)).unwrap();
                             statement.next().unwrap();
-                            //}
+                            }
                         }
                     }
                 }

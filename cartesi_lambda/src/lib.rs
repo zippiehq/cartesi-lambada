@@ -5,12 +5,13 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use cartesi_machine_json_rpc::client::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
 use cid::Cid;
+use hyper::Request;
 use sequencer::L1BlockInfo;
 use serde_json::Value;
 use sqlite::State;
 use std::fs::File;
 use std::io::Cursor;
-use hyper::Request;
+use std::time::{Duration, SystemTime};
 
 pub const MACHINE_IO_ADDRESSS: u64 = 0x90000000000000;
 const READ_BLOCK: u64 = 0x00001;
@@ -29,8 +30,10 @@ pub async fn execute(
     state_cid: Vec<u8>,
     block_info: &L1BlockInfo,
 ) -> Result<Vec<u8>, std::io::Error> {
-
-    tracing::info!("state cid {:?}", Cid::try_from(state_cid.clone()).unwrap().to_string());
+    tracing::info!(
+        "state cid {:?}",
+        Cid::try_from(state_cid.clone()).unwrap().to_string()
+    );
 
     let req = Request::builder()
         .method("POST")
@@ -64,7 +67,10 @@ pub async fn execute(
             panic!("{}", e)
         }
     }
-    tracing::info!("app cid {:?}", Cid::try_from(app_cid.clone()).unwrap().to_string());
+    tracing::info!(
+        "app cid {:?}",
+        Cid::try_from(app_cid.clone()).unwrap().to_string()
+    );
 
     let client = IpfsClient::from_str(ipfs_url).unwrap();
     tracing::info!("execute");
@@ -83,6 +89,7 @@ pub async fn execute(
             "loading machine from /data/snapshot/base_{}",
             Cid::try_from(app_cid.clone()).unwrap().to_string()
         );
+        let before_load_machine = SystemTime::now();
         machine
             .load_machine(
                 &format!(
@@ -96,9 +103,13 @@ pub async fn execute(
             )
             .await
             .unwrap();
+        let after_load_machine = SystemTime::now();
+        tracing::info!("It took {} milliseconds to load snapshot", after_load_machine.duration_since(before_load_machine).unwrap().as_millis());
+
         machine_loaded_state = 2;
         tracing::info!("read iflag y {:?}", machine.read_iflags_y().await.unwrap());
     } else if std::path::Path::new(&format!("/data/snapshot/base",)).exists() {
+        let before_load_machine = SystemTime::now();
         machine
             .load_machine(
                 "/data/snapshot/base",
@@ -109,6 +120,9 @@ pub async fn execute(
             )
             .await
             .unwrap();
+        let after_load_machine = SystemTime::now();
+        tracing::info!("It took {} milliseconds to load snapshot", after_load_machine.duration_since(before_load_machine).unwrap().as_millis());
+
         machine_loaded_state = 1;
     } else {
         machine
@@ -124,7 +138,7 @@ pub async fn execute(
     }
 
     loop {
-        let mut interpreter_break_reason =  Value::Null;
+        let mut interpreter_break_reason = Value::Null;
         if !machine.read_iflags_y().await.unwrap() {
             interpreter_break_reason = machine.run(u64::MAX).await.unwrap();
         }
@@ -137,7 +151,10 @@ pub async fn execute(
 
         let read_opt_be_bytes = machine.read_memory(MACHINE_IO_ADDRESSS, 8).await.unwrap();
         let opt = u64::from_be_bytes(read_opt_be_bytes.try_into().unwrap());
-        tracing::info!("before handling iflag y {:?}", machine.read_iflags_y().await.unwrap());
+        tracing::info!(
+            "before handling iflag y {:?}",
+            machine.read_iflags_y().await.unwrap()
+        );
 
         match opt {
             READ_BLOCK => {
@@ -181,7 +198,6 @@ pub async fn execute(
                     .await
                     .unwrap();
                 tracing::info!("read_block info was written");
-
             }
             EXCEPTION => {
                 tracing::info!("HTIF_YIELD_REASON_TX_EXCEPTION");
@@ -192,10 +208,9 @@ pub async fn execute(
             LOAD_TX => {
                 tracing::info!("LOAD_TX");
                 if machine_loaded_state == 0 || machine_loaded_state == 1 {
-                
                     let app_cid: cid::CidGeneric<64> = Cid::try_from(app_cid.clone()).unwrap();
                     tracing::info!(
-                        "load tx to dir: {} and read iflag : {}",
+                        "snapshot stage load tx to dir: {} and read iflag : {}",
                         format!("/data/snapshot/base_{}", app_cid.clone().to_string()),
                         machine.read_iflags_y().await.unwrap()
                     );
@@ -207,6 +222,7 @@ pub async fn execute(
                         ))
                         .await
                         .unwrap();
+                    tracing::info!("done snapshotting");
                 }
                 let current_cid = Cid::try_from(state_cid.clone()).unwrap();
                 let cid_length = current_cid.clone().to_bytes().len() as u64;
@@ -360,13 +376,16 @@ pub async fn execute(
                 tracing::info!("data written to block {:?}", memory.clone());
                 let put_response = client.block_put(data).await.unwrap();
                 tracing::info!("put_response key {:?}", put_response.key);
-
             }
             LOAD_APP => {
                 tracing::info!("LOAD_APP");
                 if machine_loaded_state == 0 {
-                    tracing::info!("load app to dir: /data/snapshot/base and read iflag : {}", machine.read_iflags_y().await.unwrap());
+                    tracing::info!(
+                        "snapshot stage load app to dir: /data/snapshot/base and read iflag : {}",
+                        machine.read_iflags_y().await.unwrap()
+                    );
                     machine.store("/data/snapshot/base").await.unwrap();
+                    tracing::info!("done snapshotting");
                 }
                 let app_cid: cid::CidGeneric<64> = Cid::try_from(app_cid.clone()).unwrap();
 
@@ -388,7 +407,6 @@ pub async fn execute(
                     .await
                     .unwrap();
                 tracing::info!("load_app info was written");
-
             }
             HINT => {
                 tracing::info!("HINT");
