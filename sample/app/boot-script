@@ -1,0 +1,4 @@
+#!/bin/sh
+curl http://127.0.0.1:5004/get_tx | sh > /tmp/output 
+ipfs files write /state/output < /tmp/output
+curl -X POST http://127.0.0.1:5004/finish

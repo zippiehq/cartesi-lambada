@@ -1,3 +1,12 @@
-# Run
+# Run compute:
 
-RUSTFLAGS="--cfg async_executor_impl=\"async-std\" --cfg async_channel_impl=\"async-std\"" cargo builds && docker build -f Dockerfile -t ghcr.io/espressosystems/espresso-sequencer/blocks-stream:main . && docker run --network host -v /home/dymchenko/m:/machines -t ghcr.io/espressosystems/espresso-sequencer/blocks-stream:main
+docker build -t cartesi-lambda:1.0
+docker run -p 3033:3033 -e COMPUTE_ONLY=1 -v $PWD/data:/data cartesi-lambda:1.0
+
+other terminal:
+
+curl -X POST -d 'echo hello world' -H "Content-Type: application/octet-stream" -v http://0.0.0.0:3033/compute/bafybeigt3ajnts6tvfppdfhrhcibmpkuk2vfkttaua5vsyl4hxztqeo2ia
+
+# Run chain:
+
+docker run -p 3033:3033 -v $PWD/data:/data -e APPCHAIN=bafybeigt3ajnts6tvfppdfhrhcibmpkuk2vfkttaua5vsyl4hxztqeo2ia  cartesi-lambda:1.0
