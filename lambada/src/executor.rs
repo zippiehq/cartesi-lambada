@@ -29,7 +29,7 @@ pub async fn subscribe(
     cartesi_machine_url: String,
     cartesi_machine_path: &str,
     ipfs_url: &str,
-    db_dir: String,
+    db_file: String,
     appchain: Vec<u8>,
     height: u64,
 ) {
@@ -38,7 +38,7 @@ pub async fn subscribe(
     let ExecutorOptions {
         sequencer_url,
     } = opt;
-    let connection = sqlite::open(db_dir.clone()).unwrap();
+    let connection = sqlite::open(db_file.clone()).unwrap();
 
     let query_service_url = sequencer_url.join("availability").unwrap();
     let hotshot = HotShotClient::new(query_service_url.clone());
@@ -130,11 +130,11 @@ pub async fn subscribe(
                             tracing::info!("found tx for our vm id");
                             tracing::info!("tx.payload().len: {:?}", tx.payload().len());
 
-                            let connection = sqlite::open(db_dir.clone()).unwrap();
+                            let connection = sqlite::open(db_file.clone()).unwrap();
                             let forked_machine_url =
                                 format!("http://{}", machine.fork().await.unwrap());
 
-                            let connection = sqlite::open(db_dir.clone()).unwrap();
+                            let connection = sqlite::open(db_file.clone()).unwrap();
                             let time_before_execute = SystemTime::now();
 
                             let result = execute(

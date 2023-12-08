@@ -74,19 +74,19 @@ pub async fn execute(
     let mut machine_loaded_state = 0;
 
     if std::path::Path::new(&format!(
-        "/data/snapshot/ipfs_using2_{}",
+        "/data/snapshot/base_{}",
         Cid::try_from(app_cid.clone()).unwrap().to_string()
     ))
     .is_dir()
     {
         tracing::info!(
-            "loading machine from /data/snapshot/ipfs_using2_{}",
+            "loading machine from /data/snapshot/base_{}",
             Cid::try_from(app_cid.clone()).unwrap().to_string()
         );
         machine
             .load_machine(
                 &format!(
-                    "/data/snapshot/ipfs_using2_{}",
+                    "/data/snapshot/base_{}",
                     Cid::try_from(app_cid.clone()).unwrap().to_string()
                 ),
                 &MachineRuntimeConfig {
@@ -98,10 +98,10 @@ pub async fn execute(
             .unwrap();
         machine_loaded_state = 2;
         tracing::info!("read iflag y {:?}", machine.read_iflags_y().await.unwrap());
-    } else if std::path::Path::new(&format!("/data/snapshot/ipfs_using2",)).exists() {
+    } else if std::path::Path::new(&format!("/data/snapshot/base",)).exists() {
         machine
             .load_machine(
-                "/data/snapshot/ipfs_using2",
+                "/data/snapshot/base",
                 &MachineRuntimeConfig {
                     skip_root_hash_check: true,
                     ..Default::default()
@@ -196,13 +196,13 @@ pub async fn execute(
                     let app_cid: cid::CidGeneric<64> = Cid::try_from(app_cid.clone()).unwrap();
                     tracing::info!(
                         "load tx to dir: {} and read iflag : {}",
-                        format!("/data/snapshot/ipfs_using2_{}", app_cid.clone().to_string()),
+                        format!("/data/snapshot/base_{}", app_cid.clone().to_string()),
                         machine.read_iflags_y().await.unwrap()
                     );
 
                     machine
                         .store(&format!(
-                            "/data/snapshot/ipfs_using2_{}",
+                            "/data/snapshot/base_{}",
                             app_cid.clone().to_string(),
                         ))
                         .await
@@ -365,8 +365,8 @@ pub async fn execute(
             LOAD_APP => {
                 tracing::info!("LOAD_APP");
                 if machine_loaded_state == 0 {
-                    tracing::info!("load app to dir: /data/snapshot/ipfs_using2 and read iflag : {}", machine.read_iflags_y().await.unwrap());
-                    machine.store("/data/snapshot/ipfs_using2").await.unwrap();
+                    tracing::info!("load app to dir: /data/snapshot/base and read iflag : {}", machine.read_iflags_y().await.unwrap());
+                    machine.store("/data/snapshot/base").await.unwrap();
                 }
                 let app_cid: cid::CidGeneric<64> = Cid::try_from(app_cid.clone()).unwrap();
 

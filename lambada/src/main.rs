@@ -23,7 +23,7 @@ async fn main() {
     setup_backtrace();
 
     let opt = Options::parse();
-    let connection = sqlite::open(opt.db_dir.clone()).unwrap();
+    let connection = sqlite::open(opt.db_file.clone()).unwrap();
     let query = "
     CREATE TABLE IF NOT EXISTS blocks (state_cid BLOB(48) NOT NULL,
     height INTEGER NOT NULL);
@@ -31,7 +31,7 @@ async fn main() {
     connection.execute(query).unwrap();
     let cartesi_machine_path = opt.machine_dir.clone();
     let cartesi_machine_url = opt.cartesi_machine_url.clone();
-    let db_dir = opt.db_dir.clone();
+    let db_file = opt.db_file.clone();
     let compute_only = opt.compute_only.clone();
     let appchain = opt.appchain.clone();
     let ipfs_url = opt.ipfs_url.clone();
@@ -74,7 +74,7 @@ async fn main() {
                 cartesi_machine_url,
                 cartesi_machine_path.as_str(),
                 ipfs_url.as_str(),
-                db_dir,
+                db_file,
                 appchain,
                 0,
             ),
@@ -101,7 +101,7 @@ async fn request_handler(
                     .to_vec();
                 let cartesi_machine_url = options.cartesi_machine_url.clone();
                 let ipfs_url = options.ipfs_url.as_str();
-                let connection = sqlite::open(options.db_dir.clone()).unwrap();
+                let connection = sqlite::open(options.db_file.clone()).unwrap();
                 let cartesi_machine_path = options.machine_dir.as_str();
 
                 let mut machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url)
