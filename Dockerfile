@@ -48,4 +48,4 @@ COPY target/debug/lambada /bin/lambada
 COPY ./state /state
 RUN mkdir /data
 RUN mkdir /data/snapshot
-CMD sh -c "ipfs daemon & sleep 30 && ipfs add --cid-version=1 -r /state && /usr/bin/jsonrpc-remote-cartesi-machine --server-address=127.0.0.1:50051 & sleep 60 && RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --sequencer-url https://query.cortado.espresso.network/  --machine-dir /machines/ipfs-using2 --appchain bafybeietvxuf5ymb4la6ctbso2qmp4zg5n7jljkn6icalmjkk5ee6pmytm"
+CMD sh -c "ipfs daemon & sleep 30 && ipfs add --cid-version=1 -r /state && /usr/bin/jsonrpc-remote-cartesi-machine --server-address=127.0.0.1:50051 & sleep 60 && RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --sequencer-url https://query.cortado.espresso.network/  --machine-dir /machines/ipfs-using2 --appchain bafybeietvxuf5ymb4la6ctbso2qmp4zg5n7jljkn6icalmjkk5ee6pmytm --cartesi-machine-url http://127.0.0.1:50051 --ipfs-url http://127.0.0.1:5001 --compute-only"

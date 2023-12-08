@@ -19,6 +19,12 @@ pub struct Options {
     #[clap(long, env = "APPCHAIN")]
     pub appchain: String,
 
+    #[clap(long, env = "CARTESI_MACHINE_URL")]
+    pub cartesi_machine_url: String,
+
+    #[clap(long, env = "IPFS_URL")]
+    pub ipfs_url: String,
+
     #[clap(long, env = "COMPUTE_ONLY")]
     pub compute_only: bool,
 }

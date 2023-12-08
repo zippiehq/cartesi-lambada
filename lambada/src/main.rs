@@ -29,8 +29,9 @@ async fn main() {
 ";
     connection.execute(query).unwrap();
     let cartesi_machine_path = opt.machine_dir.as_str();
-    let cartesi_machine_url = "http://127.0.0.1:50051".to_string();
-    let ipfs_url = "http://127.0.0.1:5001";
+    let cartesi_machine_url = opt.cartesi_machine_url;
+
+    let ipfs_url = opt.ipfs_url.as_str();
 
     let executor_options = ExecutorOptions {
         sequencer_url: opt.sequencer_url.clone(),
