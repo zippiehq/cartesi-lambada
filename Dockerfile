@@ -6,7 +6,8 @@ COPY ./Cargo.toml /build/Cargo.toml
 COPY ./Cargo.lock /build/Cargo.lock
 COPY ./cartesi_lambda /build/cartesi_lambda
 COPY ./lambada /build/lambada
-RUN --mount=type=cache,target=/usr/local/cargo/registry PATH=~/.cargo/bin:$PATH RUSTFLAGS="--cfg async_executor_impl=\"async-std\" --cfg async_channel_impl=\"async-std\"" cargo build 
+ARG RELEASE=--release
+RUN --mount=type=cache,target=/usr/local/cargo/registry PATH=~/.cargo/bin:$PATH RUSTFLAGS="--cfg async_executor_impl=\"async-std\" --cfg async_channel_impl=\"async-std\"" cargo build $RELEASE
 
 FROM debian:bookworm-20230725-slim AS image
 
@@ -23,10 +24,11 @@ RUN bash kubo/install.sh && rm -rf kubo
 
 COPY --from=zippiehq/cartesi-lambada-base-image:1.0 /lambada-base-machine.tar.gz /lambada-base-machine.tar.gz
 RUN curl -LO https://web3.link/bafybeietvxuf5ymb4la6ctbso2qmp4zg5n7jljkn6icalmjkk5ee6pmytm.car.gz
-COPY --from=build /build/target/debug/lambada /bin/lambada
+COPY --from=build /build/target/release/lambada /bin/lambada
 COPY ./entrypoint.sh /entrypoint.sh
 COPY ./sample /sample
 RUN mkdir -p /data
-CMD sh /entrypoint.sh
 
-#CMD sh -c "ipfs daemon & sleep 30 && ipfs add --cid-version=1 -r /state && /usr/bin/jsonrpc-remote-cartesi-machine --server-address=127.0.0.1:50051 & sleep 60 && RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --sequencer-url https://query.cortado.espresso.network/  --l1-provider wss://eth-sepolia.g.alchemy.com/v2/ynVGpb2sD3HhbMBR4aGbYTw5Sd2aLUQh --hotshot-address 0xed15e1fe0789c524398137a066ceb2ef9884e5d8 --machine-dir /machines/ipfs-using2 --appchain bafybeietvxuf5ymb4la6ctbso2qmp4zg5n7jljkn6icalmjkk5ee6pmytm"
+FROM scratch
+COPY --from=image / /
+CMD sh /entrypoint.sh

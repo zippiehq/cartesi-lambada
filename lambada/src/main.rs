@@ -66,7 +66,7 @@ async fn main() {
         tracing::info!("Compute only");
         server.await;
     } else {
-        tracing::info!("With subscribe");
+        tracing::info!("Runs with subscribe");
 
         join!(
             subscribe(
@@ -149,7 +149,7 @@ async fn request_handler(
             Ok(response)
         }
         (hyper::Method::GET, ["latest"]) => {
-            let connection = sqlite::open("sequencer_db").unwrap();
+            let connection = sqlite::open(options.db_file.clone()).unwrap();
             let mut statement = connection
                 .prepare("SELECT * FROM blocks ORDER BY height DESC LIMIT 1")
                 .unwrap();
@@ -171,7 +171,7 @@ async fn request_handler(
             return Err("Failed to get last block".into());
         }
         (hyper::Method::GET, ["block", height_number]) => {
-            let connection = sqlite::open("sequencer_db").unwrap();
+            let connection = sqlite::open(options.db_file.clone()).unwrap();
             let mut statement = connection
                 .prepare("SELECT * FROM blocks WHERE height=?")
                 .unwrap();

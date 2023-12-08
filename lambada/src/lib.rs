@@ -1,12 +1,11 @@
 pub mod executor;
 
-use surf_disco::Url;
 use clap::Parser;
 use ethers::types::Address;
+use surf_disco::Url;
 
 #[derive(Parser, Clone, Debug)]
 pub struct Options {
-    /// URL of a HotShot sequencer node.
     #[clap(long, env = "ESPRESSO_SEQUENCER_URL")]
     pub sequencer_url: Url,
 

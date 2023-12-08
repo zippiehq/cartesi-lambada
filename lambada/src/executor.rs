@@ -8,14 +8,9 @@ use cid::Cid;
 use ethers::prelude::*;
 use futures_util::TryStreamExt;
 use hotshot_query_service::availability::BlockQueryData;
-use hyper::Request;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use sequencer::SeqTypes;
 use sqlite::State;
-use std::fs::File;
-use std::io::Write;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;
@@ -35,9 +30,7 @@ pub async fn subscribe(
 ) {
     let mut current_cid: Vec<u8> = appchain.clone();
 
-    let ExecutorOptions {
-        sequencer_url,
-    } = opt;
+    let sequencer_url = opt.sequencer_url.clone();
     let connection = sqlite::open(db_file.clone()).unwrap();
 
     let query_service_url = sequencer_url.join("availability").unwrap();
@@ -57,7 +50,6 @@ pub async fn subscribe(
         .try_concat()
         .await
         .unwrap();
-    tracing::info!("chain info len {}", chain_info.len());
     tracing::info!(
         "chain info {}",
         String::from_utf8(chain_info.clone()).unwrap()
@@ -110,7 +102,6 @@ pub async fn subscribe(
                 }
 
                 let height = block.height();
-                //tracing::info!("block height {}", height);
                 let timestamp = block.timestamp().unix_timestamp() as u64;
                 hash = block.hash().into_bits().into_vec();
 
@@ -126,44 +117,53 @@ pub async fn subscribe(
                     if state == State::Done {
                         for (index, tx) in block.block().transactions().into_iter().enumerate() {
                             if u64::from(tx.vm()) as u64 == chain_vm_id {
-                            tracing::info!("found tx for our vm id");
-                            tracing::info!("tx.payload().len: {:?}", tx.payload().len());
+                                tracing::info!("found tx for our vm id");
+                                tracing::info!("tx.payload().len: {:?}", tx.payload().len());
 
-                            let connection = sqlite::open(db_file.clone()).unwrap();
-                            let forked_machine_url =
-                                format!("http://{}", machine.fork().await.unwrap());
+                                let forked_machine_url =
+                                    format!("http://{}", machine.fork().await.unwrap());
 
-                            let connection = sqlite::open(db_file.clone()).unwrap();
-                            let time_before_execute = SystemTime::now();
+                                let time_before_execute = SystemTime::now();
 
-                            let result = execute(
-                                forked_machine_url,
-                                cartesi_machine_path,
-                                ipfs_url,
-                                tx.payload().to_vec(),
-                                current_cid.clone(),
-                                block_info,
-                            )
-                            .await;
-                            let time_after_execute = SystemTime::now();
+                                let result = execute(
+                                    forked_machine_url,
+                                    cartesi_machine_path,
+                                    ipfs_url,
+                                    tx.payload().to_vec(),
+                                    current_cid.clone(),
+                                    block_info,
+                                )
+                                .await;
+                                let time_after_execute = SystemTime::now();
 
-                            tracing::info!("executing time {}", time_after_execute.duration_since(time_before_execute).unwrap().as_millis());
+                                tracing::info!(
+                                    "executing time {}",
+                                    time_after_execute
+                                        .duration_since(time_before_execute)
+                                        .unwrap()
+                                        .as_millis()
+                                );
 
-
-                            if let Ok(cid) = result {
-                                tracing::info!("old current_cid {:?}", Cid::try_from(current_cid.clone()).unwrap().to_string());
-                                current_cid = cid;
-                                tracing::info!("resulted current_cid {:?}", Cid::try_from(current_cid.clone()).unwrap().to_string());
-                            } else {
-                                //TODO
-                                panic!("execute failed");
-                            }
-                            let mut statement = connection
-                                .prepare("INSERT INTO blocks (state_cid, height) VALUES (?, ?)")
-                                .unwrap();
-                            statement.bind((1, &current_cid as &[u8])).unwrap();
-                            statement.bind((2, height as i64)).unwrap();
-                            statement.next().unwrap();
+                                if let Ok(cid) = result {
+                                    tracing::info!(
+                                        "old current_cid {:?}",
+                                        Cid::try_from(current_cid.clone()).unwrap().to_string()
+                                    );
+                                    current_cid = cid;
+                                    tracing::info!(
+                                        "resulted current_cid {:?}",
+                                        Cid::try_from(current_cid.clone()).unwrap().to_string()
+                                    );
+                                } else {
+                                    //TODO
+                                    panic!("execute failed");
+                                }
+                                let mut statement = connection
+                                    .prepare("INSERT INTO blocks (state_cid, height) VALUES (?, ?)")
+                                    .unwrap();
+                                statement.bind((1, &current_cid as &[u8])).unwrap();
+                                statement.bind((2, height as i64)).unwrap();
+                                statement.next().unwrap();
                             }
                         }
                     }

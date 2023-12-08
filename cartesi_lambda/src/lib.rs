@@ -9,7 +9,6 @@ use hyper::Request;
 use sequencer::L1BlockInfo;
 use serde_json::Value;
 use sqlite::State;
-use std::fs::File;
 use std::io::Cursor;
 use std::time::{Duration, SystemTime};
 
@@ -104,7 +103,13 @@ pub async fn execute(
             .await
             .unwrap();
         let after_load_machine = SystemTime::now();
-        tracing::info!("It took {} milliseconds to load snapshot", after_load_machine.duration_since(before_load_machine).unwrap().as_millis());
+        tracing::info!(
+            "It took {} milliseconds to load snapshot",
+            after_load_machine
+                .duration_since(before_load_machine)
+                .unwrap()
+                .as_millis()
+        );
 
         machine_loaded_state = 2;
         tracing::info!("read iflag y {:?}", machine.read_iflags_y().await.unwrap());
@@ -121,7 +126,13 @@ pub async fn execute(
             .await
             .unwrap();
         let after_load_machine = SystemTime::now();
-        tracing::info!("It took {} milliseconds to load snapshot", after_load_machine.duration_since(before_load_machine).unwrap().as_millis());
+        tracing::info!(
+            "It took {} milliseconds to load snapshot",
+            after_load_machine
+                .duration_since(before_load_machine)
+                .unwrap()
+                .as_millis()
+        );
 
         machine_loaded_state = 1;
     } else {
@@ -373,9 +384,7 @@ pub async fn execute(
                     .unwrap();
 
                 let data = Cursor::new(memory.clone());
-                tracing::info!("data written to block {:?}", memory.clone());
                 let put_response = client.block_put(data).await.unwrap();
-                tracing::info!("put_response key {:?}", put_response.key);
             }
             LOAD_APP => {
                 tracing::info!("LOAD_APP");
@@ -406,7 +415,7 @@ pub async fn execute(
                     )
                     .await
                     .unwrap();
-                tracing::info!("load_app info was written");
+                tracing::info!("load app info was written");
             }
             HINT => {
                 tracing::info!("HINT");

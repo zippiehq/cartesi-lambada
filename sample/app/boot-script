@@ -1,4 +1,9 @@
 #!/bin/sh
 curl http://127.0.0.1:5004/get_tx | sh > /tmp/output 
-ipfs files write /state/output < /tmp/output
+echo "state of mfs:"
+ipfs files ls /
+echo "done"
+ipfs files ls /state
+echo "done ls state"
+ipfs files write -e /state/output < /tmp/output
 curl -X POST http://127.0.0.1:5004/finish

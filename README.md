@@ -5,7 +5,7 @@ docker run -p 3033:3033 -e COMPUTE_ONLY=1 -v $PWD/data:/data cartesi-lambada:1.0
 
 other terminal:
 
-curl -X POST -d 'echo hello world' -H "Content-Type: application/octet-stream" -v http://0.0.0.0:3033/compute/bafybeigt3ajnts6tvfppdfhrhcibmpkuk2vfkttaua5vsyl4hxztqeo2ia
+curl -X POST -d 'echo hello world' -H "Content-Type: application/octet-stream" -v http://0.0.0.0:3033/compute/bafybeicgxhvvrhu6anwlozqgydpfp3qhn67zqoiv4ivjw2nndgwzbrztce
 
 # Run chain:
 
