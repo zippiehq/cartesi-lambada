@@ -5,9 +5,12 @@ use cid::Cid;
 use clap::Parser;
 use ethers::prelude::*;
 use futures::join;
+use futures::TryStreamExt;
+use hyper::body::Buf;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{header, Body, Client, HeaderMap, Method, Request, Response, Server};
 use hyper_tls::HttpsConnector;
+use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use lambada::executor::{subscribe, ExecutorOptions};
 use lambada::Options;
 use sequencer::L1BlockInfo;
@@ -196,41 +199,78 @@ async fn request_handler(
             return Err("Failed to receive block".into());
         }
         (hyper::Method::POST, ["submit"]) => {
-            let https = HttpsConnector::new();
-            let client = Client::builder().build::<_, hyper::Body>(https);
-            
-            let uri = format!("{}submit/submit", options.sequencer_url.clone())
-                .parse()
-                .unwrap();
+            if reqest.headers().get("content-type")
+                == Some(&hyper::header::HeaderValue::from_static(
+                    "application/octet-stream",
+                ))
+            {
+                let https = HttpsConnector::new();
+                let client = Client::builder().build::<_, hyper::Body>(https);
 
-            let data: Data = serde_json::from_slice(
-                &hyper::body::to_bytes(reqest.into_body())
+                let uri = format!("{}submit/submit", options.sequencer_url.clone())
+                    .parse()
+                    .unwrap();
+
+                let data: Vec<u8> = hyper::body::to_bytes(reqest.into_body())
                     .await
                     .unwrap()
-                    .to_vec(),
-            )
-            .unwrap();
+                    .to_vec();
+                let appchain = options.appchain.clone();
 
-            let mut req = Request::new(Body::from(bincode::serialize(&data).unwrap()));
-            *req.uri_mut() = uri;
-            let mut map = HeaderMap::new();
-            map.insert(
-                header::CONTENT_TYPE,
-                "application/octet-stream".parse().unwrap(),
-            );
-            *req.headers_mut() = map;
-            *req.method_mut() = Method::POST;
+                let ipfs_client = IpfsClient::from_str(options.ipfs_url.clone().as_str()).unwrap();
+                let chain_info = ipfs_client
+                    .cat(&(appchain + "/app/chain-info.json"))
+                    .map_ok(|chunk| chunk.to_vec())
+                    .try_concat()
+                    .await
+                    .unwrap();
 
-            let response = client.request(req).await?;
-            Ok(response)
+                let chain_info = serde_json::from_slice::<serde_json::Value>(&chain_info)
+                    .expect("error reading chain-info.json file");
+
+                let chain_vm_id: u64 = chain_info
+                    .get("sequencer")
+                    .unwrap()
+                    .get("vm-id")
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap();
+
+                tracing::info!("data for submitting {:?}", data.clone());
+
+                let submit_data: Data = Data {
+                    payload: data,
+                    vm: chain_vm_id,
+                };
+
+                let mut req = Request::new(Body::from(bincode::serialize(&submit_data).unwrap()));
+                *req.uri_mut() = uri;
+                let mut map = HeaderMap::new();
+                map.insert(
+                    header::CONTENT_TYPE,
+                    "application/octet-stream".parse().unwrap(),
+                );
+                *req.headers_mut() = map;
+                *req.method_mut() = Method::POST;
+
+                let response = client.request(req).await?;
+                Ok(response)
+            }
+            else {
+                return Err("Request header should be application/octet-streams".into());
+            }
+            
         }
         _ => {
             panic!("Invalid request")
         }
     }
 }
+
 #[derive(Serialize, Deserialize)]
 struct Data {
     vm: u64,
-    payload: Vec<u64>,
+    payload: Vec<u8>,
 }
