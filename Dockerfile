@@ -20,7 +20,7 @@ RUN apt-get update && DEBIAN_FRONTEND="noninteractive" apt-get install -y \
 
 RUN curl -LO https://github.com/ipfs/kubo/releases/download/v0.24.0/kubo_v0.24.0_linux-amd64.tar.gz
 RUN tar -xvzf kubo_v0.24.0_linux-amd64.tar.gz
-RUN bash kubo/install.sh && rm -rf kubo
+RUN bash kubo/install.sh && rm -rf kubo kubo_v0.24.0_linux-amd64.tar.gz
 
 COPY --from=zippiehq/cartesi-lambada-base-image:1.0 /lambada-base-machine.tar.gz /lambada-base-machine.tar.gz
 COPY --from=build /build/target/release/lambada /bin/lambada

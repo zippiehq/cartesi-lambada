@@ -22,7 +22,16 @@ if [ x$IPFS_URL = x ]; then
   IPFS_URL=http://127.0.0.1:5001
   
   if [ -e /data/preload ]; then
-     IPFS_PATH=/data/ipfs ipfs add --cid-version=1 -r /data/preload
+     (
+        # "live reload"
+        while true; do
+          touch /preload-before
+          IPFS_PATH=/data/ipfs ipfs add --cid-version=1 -Q -r /data/preload > /preload-after
+          diff -u /preload-before /preload-after
+          cp /preload-after /preload-before
+          sleep 5
+        done
+     ) &
   fi
   IPFS_PATH=/data/ipfs ipfs add --cid-version=1 -r /sample
 fi
