@@ -6,8 +6,8 @@ use clap::Parser;
 use ethers::prelude::*;
 use futures::join;
 use futures::TryStreamExt;
-use hyper::body::Buf;
 use hyper::service::{make_service_fn, service_fn};
+use hyper::{body::Buf, StatusCode};
 use hyper::{header, Body, Client, HeaderMap, Method, Request, Response, Server};
 use hyper_tls::HttpsConnector;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
@@ -16,10 +16,9 @@ use lambada::Options;
 use sequencer::L1BlockInfo;
 use serde::{Deserialize, Serialize};
 use sqlite::State;
-use std::fmt::format;
 use std::process::Command;
 use std::sync::Arc;
-
+use std::{convert::Infallible, fmt::format};
 #[async_std::main]
 async fn main() {
     setup_logging();
@@ -48,16 +47,12 @@ async fn main() {
     let service = make_service_fn(|_| {
         let options = Arc::clone(&context);
         async move {
-            Ok::<_, hyper::Error>(service_fn(move |req| {
+            Ok::<_, Infallible>(service_fn(move |req| {
                 let options = Arc::clone(&options);
                 async move {
                     let path = req.uri().path().to_owned();
                     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-                    let output = request_handler(req, &segments, options).await;
-                    match output {
-                        Ok(res) => Ok(res),
-                        Err(e) => Err(e.to_string()),
-                    }
+                    Ok::<_, Infallible>(request_handler(req, &segments, options).await)
                 }
             }))
         }
@@ -90,7 +85,7 @@ async fn request_handler(
     reqest: Request<Body>,
     segments: &[&str],
     options: Arc<lambada::Options>,
-) -> Result<Response<Body>, Box<dyn std::error::Error + 'static>> {
+) -> Response<Body> {
     match (reqest.method().clone(), segments) {
         (hyper::Method::POST, ["compute", cid]) => {
             if reqest.headers().get("content-type")
@@ -136,22 +131,46 @@ async fn request_handler(
 
                         let response = Response::new(Body::from(json_response));
 
-                        return Ok(response);
+                        return response;
                     }
                     Err(e) => {
-                        return Err(e.into());
+                        let json_error = serde_json::json!({
+                            "error": e.to_string(),
+                        });
+                        let json_error = serde_json::to_string(&json_error).unwrap();
+                        return Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .body(Body::from(json_error))
+                            .unwrap();
                     }
                 }
             } else {
-                return Err("Request header should be application/octet-streams".into());
+                let json_error = serde_json::json!({
+                    "error": "request header should be application/octet-streams",
+                });
+                let json_error = serde_json::to_string(&json_error).unwrap();
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from(json_error))
+                    .unwrap();
             }
         }
         (hyper::Method::GET, ["health"]) => {
             let json_request = r#"{"healthy": "true"}"#;
             let response = Response::new(Body::from(json_request));
-            Ok(response)
+            response
         }
         (hyper::Method::GET, ["latest"]) => {
+            if options.compute_only {
+                let json_error = serde_json::json!({
+                    "error": "in compute only mode",
+                });
+                let json_error = serde_json::to_string(&json_error).unwrap();
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from(json_error))
+                    .unwrap();
+            }
             let connection = sqlite::open(options.db_file.clone()).unwrap();
             let mut statement = connection
                 .prepare("SELECT * FROM blocks ORDER BY height DESC LIMIT 1")
@@ -169,11 +188,28 @@ async fn request_handler(
 
                 let json_request = serde_json::to_string(&json_request_value).unwrap();
                 let response = Response::new(Body::from(json_request));
-                return Ok(response);
+                return response;
             }
-            return Err("Failed to get last block".into());
+            let json_error = serde_json::json!({
+                "error": "failed to get last block",
+            });
+            let json_error = serde_json::to_string(&json_error).unwrap();
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from(json_error))
+                .unwrap();
         }
         (hyper::Method::GET, ["block", height_number]) => {
+            if options.compute_only {
+                let json_error = serde_json::json!({
+                    "error": "in compute only mode",
+                });
+                let json_error = serde_json::to_string(&json_error).unwrap();
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from(json_error))
+                    .unwrap();
+            }
             let connection = sqlite::open(options.db_file.clone()).unwrap();
             let mut statement = connection
                 .prepare("SELECT * FROM blocks WHERE height=?")
@@ -194,11 +230,28 @@ async fn request_handler(
 
                 let json_request = serde_json::to_string(&json_request_value).unwrap();
                 let response = Response::new(Body::from(json_request));
-                return Ok(response);
+                return response;
             }
-            return Err("Failed to receive block".into());
+            let json_error = serde_json::json!({
+                "error": "failed to receive block",
+            });
+            let json_error = serde_json::to_string(&json_error).unwrap();
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from(json_error))
+                .unwrap();
         }
         (hyper::Method::POST, ["submit"]) => {
+            if options.compute_only {
+                let json_error = serde_json::json!({
+                    "error": "in compute only mode",
+                });
+                let json_error = serde_json::to_string(&json_error).unwrap();
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from(json_error))
+                    .unwrap();
+            }
             if reqest.headers().get("content-type")
                 == Some(&hyper::header::HeaderValue::from_static(
                     "application/octet-stream",
@@ -255,16 +308,28 @@ async fn request_handler(
                 *req.headers_mut() = map;
                 *req.method_mut() = Method::POST;
 
-                let response = client.request(req).await?;
-                Ok(response)
+                let response = client.request(req).await.unwrap();
+                return response;
+            } else {
+                let json_error = serde_json::json!({
+                    "error": "request header should be application/octet-streams",
+                });
+                let json_error = serde_json::to_string(&json_error).unwrap();
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from(json_error))
+                    .unwrap();
             }
-            else {
-                return Err("Request header should be application/octet-streams".into());
-            }
-            
         }
         _ => {
-            panic!("Invalid request")
+            let json_error = serde_json::json!({
+                "error": "Invalid request",
+            });
+            let json_error = serde_json::to_string(&json_error).unwrap();
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from(json_error))
+                .unwrap();
         }
     }
 }
