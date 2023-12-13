@@ -1,6 +1,6 @@
 #!/bin/sh
 if [ x$IPFS_URL = x ]; then
-   echo "Running container-local IPFS instance"
+  echo "Running container-local IPFS instance"
   if [ ! -e /data/ipfs ]; then
     IPFS_PATH=/data/ipfs ipfs init --profile=server
   fi
