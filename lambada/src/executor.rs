@@ -1,7 +1,10 @@
 use hyper::client::conn::Connection;
-use sequencer::L1BlockInfo;
+use sequencer::{L1BlockInfo, VmId};
 use surf_disco::Url;
-type HotShotClient = surf_disco::Client<hotshot_query_service::Error>;
+use tide_disco::{error::ServerError, Error};
+
+type HotShotClient = surf_disco::Client<ServerError>;
+
 use cartesi_lambda::execute;
 use cartesi_machine_json_rpc::client::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
 use cid::Cid;
@@ -9,6 +12,7 @@ use ethers::prelude::*;
 use futures_util::TryStreamExt;
 use hotshot_query_service::availability::BlockQueryData;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
+use jf_primitives::merkle_tree::namespaced_merkle_tree::NamespaceProof;
 use sequencer::SeqTypes;
 use sqlite::State;
 use std::time::{Duration, SystemTime};
@@ -91,21 +95,27 @@ pub async fn subscribe(
         match block_data {
             Ok(block) => {
                 let block: BlockQueryData<SeqTypes> = block;
-
-                let mut block_info: &L1BlockInfo = &L1BlockInfo {
+                let payload = block.payload();
+                
+                let proof = payload.get_namespace_proof(VmId::from(chain_vm_id));
+                let transactions = proof.get_namespace_leaves();
+                
+                let mut block_info: L1BlockInfo = L1BlockInfo {
                     number: 0,
                     timestamp: U256([0; 4]),
                     hash: H256([0; 32]),
                 };
-                if let Some(info) = block.block().l1_finalized() {
+ 
+                if let Some(info) = block.header().l1_finalized {
                     block_info = info;
                 }
-
+                
                 let height = block.height();
-                let timestamp = block.timestamp().unix_timestamp() as u64;
+                let timestamp = block.header().timestamp as u64;
+
                 hash = block.hash().into_bits().into_vec();
 
-                if block.block().transactions().len() != 0 {
+                if transactions.len() != 0 {
                     hash = block.hash().into_bits().into_vec();
                 }
                 let mut statement = connection
@@ -115,7 +125,8 @@ pub async fn subscribe(
 
                 if let Ok(state) = statement.next() {
                     if state == State::Done {
-                        for (index, tx) in block.block().transactions().into_iter().enumerate() {
+                        for (index, tx) in transactions.into_iter().enumerate() {
+                            // don't need this check anymore?
                             if u64::from(tx.vm()) as u64 == chain_vm_id {
                                 tracing::info!("found tx for our vm id");
                                 tracing::info!("tx.payload().len: {:?}", tx.payload().len());
@@ -131,7 +142,7 @@ pub async fn subscribe(
                                     ipfs_url,
                                     tx.payload().to_vec(),
                                     current_cid.clone(),
-                                    block_info,
+                                    &block_info,
                                 )
                                 .await;
                                 let time_after_execute = SystemTime::now();
