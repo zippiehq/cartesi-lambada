@@ -4,7 +4,8 @@ if [ x$IPFS_URL = x ]; then
   if [ ! -e /data/ipfs ]; then
     IPFS_PATH=/data/ipfs ipfs init --profile=server
   fi
-
+  IPFS_PATH=/data/ipfs ipfs config Addresses.API /ip4/0.0.0.0/tcp/5001
+  IPFS_PATH=/data/ipfs ipfs config Addresses.Gateway /ip4/0.0.0.0/tcp/8080
   IPFS_PATH=/data/ipfs ipfs daemon &
   IPFS_HOST="127.0.0.1"
   IPFS_PORT="5001"
@@ -72,7 +73,7 @@ if [ x$COMPUTE_ONLY = x1 ]; then
 fi
 
 if [ x$SEQUENCER_URL = x ]; then
-   SEQUENCER_URL=https://query.cortado.espresso.network/
+   SEQUENCER_URL=https://espresso.tspre.org
 fi
 
 if [ x$APPCHAIN = x ]; then
