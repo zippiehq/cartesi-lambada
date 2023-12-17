@@ -75,6 +75,7 @@ async fn main() {
     });
 
     let server = Server::bind(&addr).serve(Box::new(service));
+    tracing::info!("Cartesi Lambada listening on {}", addr);
     server.await.unwrap();
 }
 
@@ -285,7 +286,7 @@ async fn request_handler(
                 let https = HttpsConnector::new();
                 let client = Client::builder().build::<_, hyper::Body>(https);
 
-                let uri = format!("{}submit/submit", options.sequencer_url.clone())
+                let uri = format!("{}/submit/submit", options.sequencer_url.clone())
                     .parse()
                     .unwrap();
 

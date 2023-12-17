@@ -67,7 +67,7 @@ pub async fn execute(
     let req = Request::builder()
         .method("POST")
         .uri(format!(
-            "{}/api/v0/dag/resolve?arg={}/app",
+            "{}api/v0/dag/resolve?arg={}/app",
             ipfs_url,
             state_cid.to_string()
         ))

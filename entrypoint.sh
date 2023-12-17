@@ -65,20 +65,8 @@ if [ ! -e /data/base-machines/lambada-base-machine ]; then
    cd /
 fi
 
-COMPUTE_ONLY_OPT=
-
-if [ x$COMPUTE_ONLY = x1 ]; then
-   COMPUTE_ONLY_OPT=--compute-only
-   APPCHAIN=bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354 # empty directory
-fi
-
 if [ x$SEQUENCER_URL = x ]; then
    SEQUENCER_URL=https://espresso.tspre.org
-fi
-
-if [ x$APPCHAIN = x ]; then
-   echo -n "No appchain specified and not in compute only mode"
-   exit 1
 fi
 
 mkdir -p /data/db
@@ -88,5 +76,4 @@ RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --sequencer-url $SEQUENCER_URL \
 	--machine-dir=/data/base-machines/lambada-base-machine \
 	--ipfs-url $IPFS_URL \
 	--cartesi-machine-url $CARTESI_MACHINE_URL \
-	--db-path /data/db/ \
-	--appchain $APPCHAIN $COMPUTE_ONLY_OPT
+	--db-path /data/db/

@@ -250,7 +250,7 @@ async fn get_chain_info_cid(opt: &ExecutorOptions, current_cid: Cid) -> Option<C
     let req = Request::builder()
         .method("POST")
         .uri(format!(
-            "{}/api/v0/dag/resolve?arg={}{}",
+            "{}api/v0/dag/resolve?arg={}{}",
             opt.ipfs_url.as_str(),
             current_cid.to_string(),
             "/app/chain-info.json"
