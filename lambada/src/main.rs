@@ -2,14 +2,14 @@ use async_compatibility_layer::logging::{setup_backtrace, setup_logging};
 use async_std::sync::Mutex;
 use async_std::task;
 use cartesi_lambda::execute;
-use cartesi_machine_json_rpc::client::{JsonRpcCartesiMachineClient};
+use cartesi_machine_json_rpc::client::JsonRpcCartesiMachineClient;
 use cid::Cid;
 use clap::Parser;
 use ethers::prelude::*;
 use futures::join;
 use futures::TryStreamExt;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{StatusCode};
+use hyper::StatusCode;
 use hyper::{header, Body, Client, HeaderMap, Method, Request, Response, Server};
 use hyper_tls::HttpsConnector;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
@@ -34,12 +34,11 @@ async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
 
     tracing::info!("Subscribing to appchain {:?}", cid.to_string());
     task::spawn(async move {
-        let _ = task::block_on(
-            subscribe(
-                executor_options,
-                cartesi_machine_url.clone(),
-                Cid::try_from(cid).unwrap(),
-            ));        
+        let _ = task::block_on(subscribe(
+            executor_options,
+            cartesi_machine_url.clone(),
+            Cid::try_from(cid).unwrap(),
+        ));
     });
 }
 
@@ -54,6 +53,21 @@ async fn main() {
 
     let context = Arc::new(opt);
     let subscriptions = Arc::new(Mutex::new(subscriptions));
+    // Make sure database is initalized and then load subscriptions from database
+    {
+        let connection = sqlite::open(format!("{}/subscriptions.db", context.db_path)).unwrap();
+        let query = "
+            CREATE TABLE IF NOT EXISTS subscriptions (appchain_cid BLOB(48) NOT NULL);";
+        connection.execute(query).unwrap();
+
+        let mut statement = connection.prepare("SELECT * FROM subscriptions").unwrap();
+
+        while let Ok(State::Row) = statement.next() {
+            let cid = Cid::try_from(statement.read::<Vec<u8>, _>("appchain_cid").unwrap()).unwrap();
+            subscriptions.lock().await.push(cid);
+            start_subscriber(Arc::clone(&context), cid).await;
+        }
+    }
 
     let service = make_service_fn(|_| {
         let options = Arc::clone(&context);
@@ -160,7 +174,11 @@ async fn request_handler(
             response
         }
         (hyper::Method::GET, ["subscribe", appchain]) => {
-            if subscriptions.lock().await.contains(&Cid::try_from(appchain.to_string().clone()).unwrap()) {
+            if subscriptions
+                .lock()
+                .await
+                .contains(&Cid::try_from(appchain.to_string().clone()).unwrap())
+            {
                 let json_error = serde_json::json!({
                     "error": "subscription already exists",
                 });
@@ -172,14 +190,28 @@ async fn request_handler(
             }
             let cid = Cid::try_from(appchain.to_string().clone()).unwrap();
             subscriptions.lock().await.push(cid);
-
+            {
+                let connection =
+                    sqlite::open(format!("{}/subscriptions.db", options.db_path)).unwrap();
+                let mut statement = connection
+                    .prepare("INSERT INTO subscriptions (appchain_cid) VALUES (?)")
+                    .unwrap();
+                statement
+                    .bind((1, &cid.to_bytes() as &[u8]))
+                    .unwrap();
+                statement.next().unwrap();
+            }
             start_subscriber(options, cid).await;
             let json_request = r#"{"ok": "true"}"#;
             let response = Response::new(Body::from(json_request));
             response
         }
         (hyper::Method::GET, ["latest", appchain]) => {
-            if !subscriptions.lock().await.contains(&Cid::try_from(appchain.to_string().clone()).unwrap()) {
+            if !subscriptions
+                .lock()
+                .await
+                .contains(&Cid::try_from(appchain.to_string().clone()).unwrap())
+            {
                 let json_error = serde_json::json!({
                     "error": "no such subscription",
                 });
