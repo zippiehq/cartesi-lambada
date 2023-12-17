@@ -9,7 +9,7 @@ COPY ./Cargo.lock /build/Cargo.lock
 COPY ./cartesi_lambda /build/cartesi_lambda
 COPY ./lambada /build/lambada
 ARG RELEASE=--release
-RUN --mount=type=cache,target=/usr/local/cargo/registry PATH=~/.cargo/bin:$PATH RUSTFLAGS="--cfg async_executor_impl=\"async-std\" --cfg async_channel_impl=\"async-std\"" cargo build $RELEASE
+RUN --mount=type=cache,target=/usr/local/cargo/registry PATH=~/.cargo/bin:$PATH cargo build $RELEASE
 
 FROM debian:bookworm-20230725-slim AS image
 

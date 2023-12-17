@@ -88,5 +88,5 @@ RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --sequencer-url $SEQUENCER_URL \
 	--machine-dir=/data/base-machines/lambada-base-machine \
 	--ipfs-url $IPFS_URL \
 	--cartesi-machine-url $CARTESI_MACHINE_URL \
-	--db-file /data/db/lambada.db \
+	--db-path /data/db/ \
 	--appchain $APPCHAIN $COMPUTE_ONLY_OPT
