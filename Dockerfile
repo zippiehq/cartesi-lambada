@@ -14,7 +14,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry PATH=~/.cargo/bin:$PATH 
 
 FROM debian:bookworm-20230725-slim AS image
 
-RUN apt-get update && DEBIAN_FRONTEND="noninteractive" apt-get install -y curl netcat-traditional
+RUN apt-get update && DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends curl netcat-traditional
 ARG ARCH=amd64
 RUN curl -LO https://github.com/cartesi/machine-emulator/releases/download/v0.15.2/cartesi-machine-v0.15.2_$ARCH.deb
 RUN apt-get update && DEBIAN_FRONTEND="noninteractive" apt-get install -y \

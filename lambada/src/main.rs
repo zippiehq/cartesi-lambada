@@ -1,5 +1,6 @@
 use async_compatibility_layer::logging::{setup_backtrace, setup_logging};
 use async_std::sync::Mutex;
+use async_std::task;
 use cartesi_lambda::execute;
 use cartesi_machine_json_rpc::client::{JsonRpcCartesiMachineClient};
 use cid::Cid;
@@ -31,12 +32,15 @@ async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
     };
     let cartesi_machine_url = options.cartesi_machine_url.to_string().clone();
 
-    subscribe(
-        executor_options,
-        cartesi_machine_url.clone(),
-        Cid::try_from(cid).unwrap(),
-    )
-    .await;
+    tracing::info!("Subscribing to appchain {:?}", cid.to_string());
+    task::spawn(async move {
+        let _ = task::block_on(
+            subscribe(
+                executor_options,
+                cartesi_machine_url.clone(),
+                Cid::try_from(cid).unwrap(),
+            ));        
+    });
 }
 
 #[async_std::main]
@@ -47,18 +51,9 @@ async fn main() {
     let opt = Options::parse();
     let subscriptions = Vec::<Cid>::new();
     let addr = ([0, 0, 0, 0], 3033).into();
-    let compute_only = opt.compute_only.clone();
 
     let context = Arc::new(opt);
     let subscriptions = Arc::new(Mutex::new(subscriptions));
-
-    if !compute_only {
-        let appchain = context.appchain.clone();
-        let appchain = Cid::try_from(appchain).unwrap();
-
-        subscriptions.lock().await.push(appchain);
-        tracing::info!("Subscribing to {:?}", appchain.to_string());
-    }
 
     let service = make_service_fn(|_| {
         let options = Arc::clone(&context);
@@ -80,15 +75,7 @@ async fn main() {
     });
 
     let server = Server::bind(&addr).serve(Box::new(service));
-    if !compute_only { 
-        let cid = subscriptions.lock().await.first().unwrap().clone();
-        join!(
-            start_subscriber(Arc::clone(&context), cid),
-            server
-        );
-    } else {
-        server.await.unwrap();
-    }
+    server.await.unwrap();
 }
 
 async fn request_handler(
@@ -168,6 +155,25 @@ async fn request_handler(
         }
         (hyper::Method::GET, ["health"]) => {
             let json_request = r#"{"healthy": "true"}"#;
+            let response = Response::new(Body::from(json_request));
+            response
+        }
+        (hyper::Method::GET, ["subscribe", appchain]) => {
+            if subscriptions.lock().await.contains(&Cid::try_from(appchain.to_string().clone()).unwrap()) {
+                let json_error = serde_json::json!({
+                    "error": "subscription already exists",
+                });
+                let json_error = serde_json::to_string(&json_error).unwrap();
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from(json_error))
+                    .unwrap();
+            }
+            let cid = Cid::try_from(appchain.to_string().clone()).unwrap();
+            subscriptions.lock().await.push(cid);
+
+            start_subscriber(options, cid).await;
+            let json_request = r#"{"ok": "true"}"#;
             let response = Response::new(Body::from(json_request));
             response
         }
