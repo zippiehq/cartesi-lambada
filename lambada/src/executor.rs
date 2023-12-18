@@ -21,8 +21,8 @@ use std::{time::{Duration, SystemTime}, sync::Arc};
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;
 #[derive(Clone, Debug)]
 pub struct ExecutorOptions {
-    pub sequencer_url: Url,
-    pub ipfs_url: Url,
+    pub sequencer_url: String,
+    pub ipfs_url: String,
     pub db_path: String,
     pub base_cartesi_machine_path: String,
 }
@@ -41,7 +41,7 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
 ";
     connection.execute(query).unwrap();
 
-    let query_service_url = sequencer_url.join("availability").unwrap();
+    let query_service_url = Url::parse(&sequencer_url).unwrap().join("availability").unwrap();
 
     let mut machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url)
         .await
@@ -65,7 +65,7 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
         current_height = height;
     }
 
-    let ipfs_client = IpfsClient::from_str(opt.ipfs_url.as_str()).unwrap();
+    let ipfs_client = IpfsClient::from_str(&opt.ipfs_url).unwrap();
     // Set what our current chain info is, so we can notice later on if it changes
     let mut current_chain_info_cid: Option<Cid> = get_chain_info_cid(&opt, current_cid).await;
     if current_chain_info_cid == None {
@@ -250,8 +250,8 @@ async fn get_chain_info_cid(opt: &ExecutorOptions, current_cid: Cid) -> Option<C
     let req = Request::builder()
         .method("POST")
         .uri(format!(
-            "{}api/v0/dag/resolve?arg={}{}",
-            opt.ipfs_url.as_str(),
+            "{}/api/v0/dag/resolve?arg={}{}",
+            opt.ipfs_url,
             current_cid.to_string(),
             "/app/chain-info.json"
         ))

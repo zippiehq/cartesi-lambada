@@ -6,7 +6,6 @@ use cartesi_machine_json_rpc::client::JsonRpcCartesiMachineClient;
 use cid::Cid;
 use clap::Parser;
 use ethers::prelude::*;
-use futures::join;
 use futures::TryStreamExt;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::StatusCode;
@@ -18,15 +17,13 @@ use lambada::Options;
 use sequencer::L1BlockInfo;
 use serde::{Deserialize, Serialize};
 use sqlite::State;
-use std::str::FromStr;
 use std::sync::Arc;
-use std::{convert::Infallible, fmt::format};
-use tide_disco::Url;
+use std::{convert::Infallible};
 
 async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
     let executor_options = ExecutorOptions {
-        sequencer_url: Url::from_str(&options.sequencer_url).unwrap(),
-        ipfs_url: Url::from_str(&options.ipfs_url).unwrap(),
+        sequencer_url: options.sequencer_url.clone(),
+        ipfs_url: options.ipfs_url.clone(),
         db_path: options.db_path.clone(),
         base_cartesi_machine_path: options.machine_dir.clone(),
     };
