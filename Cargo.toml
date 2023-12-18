@@ -3,5 +3,4 @@
 members = [
   "cartesi_lambda",
   "lambada",
-  "celestia_stubs"
 ]

@@ -1,15 +1,14 @@
 use hyper::client::conn::Connection;
+use hyper::{header, header::HeaderValue};
 use sequencer::{L1BlockInfo, VmId};
 use surf_disco::Url;
 use tide_disco::{error::ServerError, Error};
-use hyper::{header, header::HeaderValue};
 
 type HotShotClient = surf_disco::Client<ServerError>;
 
 use base64::{engine::general_purpose, Engine};
 use cartesi_lambda::execute;
 use cartesi_machine_json_rpc::client::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
-use celestia_stubs::index::CelestiaNodeAPI;
 use cid::Cid;
 use ethers::prelude::*;
 use futures_util::TryStreamExt;
@@ -24,6 +23,8 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
+use celestia_rpc::{HeaderClient, BlobClient};
+use celestia_types::nmt::{Namespace};
 
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;
 #[derive(Clone, Debug)]
@@ -48,8 +49,11 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
 ";
     connection.execute(query).unwrap();
 
-    let query_service_url = Url::parse(&sequencer_url).unwrap().join("availability").unwrap();
-    
+    let query_service_url = Url::parse(&sequencer_url)
+        .unwrap()
+        .join("availability")
+        .unwrap();
+
     let mut machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url)
         .await
         .unwrap();
@@ -262,22 +266,15 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
                 }
             }
             "celestia" => {
-                let token = std::env::var("CELESTIA_NODE_AUTH_TOKEN_WRITE").unwrap();
-                let mut headers = HeaderMap::new();
-                let val = HeaderValue::from_str(&format!("Bearer {token}")).unwrap();
-                headers.insert(header::AUTHORIZATION, val);
+                let token = std::env::var("CELESTIA_NODE_AUTH_TOKEN_READ").unwrap();
+            
+                let client = celestia_rpc::Client::new(sequencer_url.clone().as_str(), Some(token.as_str())).await.unwrap();
 
-                let transport = HttpClientBuilder::default()
-                    .set_headers(headers)
-                    .build(sequencer_url.clone())
-                    .unwrap();
-
-                let client = CelestiaNodeAPI::new(transport);
-                match client.HeaderWaitForHeight(1).await {
+                match client.header_wait_for_height(1).await{
                     Ok(_) => {
-                        let mut state = client.HeaderSyncState().await.unwrap();
+                        let mut state = client.header_sync_state().await.unwrap();
                         while client
-                            .HeaderWaitForHeight(state.height.unwrap() + 1)
+                            .header_wait_for_height(state.height + 1)
                             .await
                             .is_ok()
                         {
@@ -287,33 +284,25 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
                                 hash: H256([0; 32]),
                             };
                             match client
-                                .BlobGetAll(
-                                    state.height.unwrap(),
-                                    vec![String::from("AAAAAAAAAAAAAAAAAAAAAAAAAEJpDCBNOWAP3dM=")], //can't use vm id as be bytes converted to vase64 str as expected lenght of namespace is 29
+                                .blob_get_all(
+                                    state.height,
+                                    &[Namespace::new_v0(&chain_vm_id.to_be_bytes()).unwrap()],
                                 )
                                 .await
                             {
                                 Ok(blobs) => {
-                                    println!("received blobs vector {:?}", blobs);
                                     for blob in blobs {
+                                        tracing::info!("new blob {:?}", blob);
                                         let forked_machine_url =
                                             format!("http://{}", machine.fork().await.unwrap());
 
                                         let time_before_execute = SystemTime::now();
 
-                                        let mut data = Vec::new();
-
-                                        if let Some(blob_data) = blob.data{
-                                            data = general_purpose::STANDARD
-                                                .decode(blob_data)
-                                                .unwrap();
-                                        }
-
                                         let result = execute(
                                             forked_machine_url,
                                             &opt.base_cartesi_machine_path,
                                             opt.ipfs_url.as_str(),
-                                            data,
+                                            blob.data,
                                             current_cid.clone(),
                                             block_info,
                                         )
@@ -351,14 +340,13 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
                                         statement
                                             .bind((1, &current_cid.to_bytes() as &[u8]))
                                             .unwrap();
-                                        statement.bind((2, state.height.unwrap() as i64)).unwrap();
+                                        statement.bind((2, state.height as i64)).unwrap();
                                         statement.next().unwrap();
                                     }
                                 }
-                                Err(e) => {
-                                }
+                                Err(e) => {}
                             }
-                            state = client.HeaderSyncState().await.unwrap();
+                            state = client.header_sync_state().await.unwrap();
                         }
                     }
                     Err(e) => {

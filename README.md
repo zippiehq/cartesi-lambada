@@ -17,11 +17,11 @@ docker run -p 127.0.0.1:3033:3033 -v $PWD/data:/data cartesi-lambada:1.0
 
 other terminal:
 
-curl -X POST -d 'echo hello world' -H "Content-Type: application/octet-stream" -v http://127.0.0.1:3033/compute/bafybeigt3ajnts6tvfppdfhrhcibmpkuk2vfkttaua5vsyl4hxztqeo2ia
+curl -X POST -d 'echo hello world' -H "Content-Type: application/octet-stream" -v http://127.0.0.1:3033/compute/bafybeibbvzkwq7alhs65npugunlyt37vruuyqor76szt23nnxiqsjfvjbq
 
 # Run chain:
 
-Sample <appchain> is bafybeigt3ajnts6tvfppdfhrhcibmpkuk2vfkttaua5vsyl4hxztqeo2ia
+Sample <appchain> is bafybeibbvzkwq7alhs65npugunlyt37vruuyqor76szt23nnxiqsjfvjbq
 
 Subscribe to a chain:
 
