@@ -8,6 +8,7 @@ COPY ./.cargo /build/.cargo
 COPY ./Cargo.toml /build/Cargo.toml
 COPY ./Cargo.lock /build/Cargo.lock
 COPY ./cartesi_lambda /build/cartesi_lambda
+COPY ./celestia_stubs /build/celestia_stubs
 COPY ./lambada /build/lambada
 ARG RELEASE=--release
 RUN --mount=type=cache,target=/usr/local/cargo/registry PATH=~/.cargo/bin:$PATH cargo build $RELEASE
