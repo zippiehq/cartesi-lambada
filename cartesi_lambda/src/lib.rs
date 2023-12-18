@@ -55,20 +55,21 @@ pub async fn execute(
     cartesi_machine_path: &str,
     ipfs_url: &str,
     payload: Vec<u8>,
-    state_cid: Vec<u8>,
+    state_cid: Cid,
     block_info: &L1BlockInfo,
-) -> Result<Vec<u8>, std::io::Error> {
+) -> Result<Cid, std::io::Error> {
     tracing::info!(
         "state cid {:?}",
-        Cid::try_from(state_cid.clone()).unwrap().to_string()
+        state_cid.to_string()
     );
 
     // Resolve what the app CID is in this current state
     let req = Request::builder()
         .method("POST")
         .uri(format!(
-            "http://127.0.0.1:5001/api/v0/dag/resolve?arg={}/app",
-            Cid::try_from(state_cid.clone()).unwrap().to_string()
+            "{}/api/v0/dag/resolve?arg={}/app",
+            ipfs_url,
+            state_cid.to_string()
         ))
         .body(hyper::Body::empty())
         .unwrap();
@@ -303,8 +304,7 @@ pub async fn execute(
                         .unwrap();
                     tracing::info!("done snapshotting");
                 }
-                let current_cid = Cid::try_from(state_cid.clone()).unwrap();
-                let cid_length = current_cid.clone().to_bytes().len() as u64;
+                let cid_length = state_cid.clone().to_bytes().len() as u64;
 
                 machine
                     .write_memory(
@@ -316,7 +316,7 @@ pub async fn execute(
                 machine
                     .write_memory(
                         MACHINE_IO_ADDRESSS + 8,
-                        STANDARD.encode(current_cid.clone().to_bytes()),
+                        STANDARD.encode(state_cid.clone().to_bytes()),
                     )
                     .await
                     .unwrap();
@@ -415,7 +415,7 @@ pub async fn execute(
                             Cid::try_from(data.clone()).unwrap()
                         );
 
-                        return Ok(data);
+                        return Ok(Cid::try_from(data).unwrap());
                     }
                     1 => {
                         tracing::info!("HTIF_YIELD_REASON_RX_REJECTED");

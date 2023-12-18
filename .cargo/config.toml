@@ -1,0 +1,2 @@
+[build]
+rustflags = ["--cfg", "async_executor_impl=\"async-std\"", "--cfg", "async_channel_impl=\"async-std\""]

@@ -1,13 +1,14 @@
 use async_compatibility_layer::logging::{setup_backtrace, setup_logging};
+use async_std::sync::Mutex;
+use async_std::task;
 use cartesi_lambda::execute;
-use cartesi_machine_json_rpc::client::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
+use cartesi_machine_json_rpc::client::JsonRpcCartesiMachineClient;
 use cid::Cid;
 use clap::Parser;
 use ethers::prelude::*;
-use futures::join;
 use futures::TryStreamExt;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{body::Buf, StatusCode};
+use hyper::StatusCode;
 use hyper::{header, Body, Client, HeaderMap, Method, Request, Response, Server};
 use hyper_tls::HttpsConnector;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
@@ -16,75 +17,84 @@ use lambada::Options;
 use sequencer::L1BlockInfo;
 use serde::{Deserialize, Serialize};
 use sqlite::State;
-use std::process::Command;
 use std::sync::Arc;
-use std::{convert::Infallible, fmt::format};
+use std::{convert::Infallible};
+
+async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
+    let executor_options = ExecutorOptions {
+        sequencer_url: options.sequencer_url.clone(),
+        ipfs_url: options.ipfs_url.clone(),
+        db_path: options.db_path.clone(),
+        base_cartesi_machine_path: options.machine_dir.clone(),
+    };
+    let cartesi_machine_url = options.cartesi_machine_url.to_string().clone();
+
+    tracing::info!("Subscribing to appchain {:?}", cid.to_string());
+    task::spawn(async move {
+        let _ = task::block_on(subscribe(
+            executor_options,
+            cartesi_machine_url.clone(),
+            Cid::try_from(cid).unwrap(),
+        ));
+    });
+}
+
 #[async_std::main]
 async fn main() {
     setup_logging();
     setup_backtrace();
 
     let opt = Options::parse();
-    let connection = sqlite::open(opt.db_file.clone()).unwrap();
-    let query = "
-    CREATE TABLE IF NOT EXISTS blocks (state_cid BLOB(48) NOT NULL,
-    height INTEGER NOT NULL);
-";
-    connection.execute(query).unwrap();
-    let cartesi_machine_path = opt.machine_dir.clone();
-    let cartesi_machine_url = opt.cartesi_machine_url.clone();
-    let db_file = opt.db_file.clone();
-    let compute_only = opt.compute_only.clone();
-    let appchain = opt.appchain.clone();
-    let ipfs_url = opt.ipfs_url.clone();
-
-    let executor_options = ExecutorOptions {
-        sequencer_url: opt.sequencer_url.clone(),
-    };
+    let subscriptions = Vec::<Cid>::new();
     let addr = ([0, 0, 0, 0], 3033).into();
 
     let context = Arc::new(opt);
+    let subscriptions = Arc::new(Mutex::new(subscriptions));
+    // Make sure database is initalized and then load subscriptions from database
+    {
+        let connection = sqlite::open(format!("{}/subscriptions.db", context.db_path)).unwrap();
+        let query = "
+            CREATE TABLE IF NOT EXISTS subscriptions (appchain_cid BLOB(48) NOT NULL);";
+        connection.execute(query).unwrap();
+
+        let mut statement = connection.prepare("SELECT * FROM subscriptions").unwrap();
+
+        while let Ok(State::Row) = statement.next() {
+            let cid = Cid::try_from(statement.read::<Vec<u8>, _>("appchain_cid").unwrap()).unwrap();
+            subscriptions.lock().await.push(cid);
+            start_subscriber(Arc::clone(&context), cid).await;
+        }
+    }
+
     let service = make_service_fn(|_| {
         let options = Arc::clone(&context);
+        let subscriptions = Arc::clone(&subscriptions);
         async move {
             Ok::<_, Infallible>(service_fn(move |req| {
                 let options = Arc::clone(&options);
+                let subscriptions = Arc::clone(&subscriptions);
+
                 async move {
                     let path = req.uri().path().to_owned();
                     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-                    Ok::<_, Infallible>(request_handler(req, &segments, options).await)
+                    Ok::<_, Infallible>(
+                        request_handler(req, &segments, options, subscriptions).await,
+                    )
                 }
             }))
         }
     });
 
     let server = Server::bind(&addr).serve(Box::new(service));
-    let appchain = Cid::try_from(appchain).unwrap().to_bytes();
-    if compute_only {
-        tracing::info!("Compute only");
-        server.await;
-    } else {
-        tracing::info!("Runs with subscribe");
-
-        join!(
-            subscribe(
-                &executor_options,
-                cartesi_machine_url,
-                cartesi_machine_path.as_str(),
-                ipfs_url.as_str(),
-                db_file,
-                appchain,
-                0,
-            ),
-            server,
-        );
-    }
+    tracing::info!("Cartesi Lambada listening on {}", addr);
+    server.await.unwrap();
 }
 
 async fn request_handler(
     reqest: Request<Body>,
     segments: &[&str],
     options: Arc<lambada::Options>,
+    subscriptions: Arc<Mutex<Vec<Cid>>>,
 ) -> Response<Body> {
     match (reqest.method().clone(), segments) {
         (hyper::Method::POST, ["compute", cid]) => {
@@ -99,14 +109,14 @@ async fn request_handler(
                     .to_vec();
                 let cartesi_machine_url = options.cartesi_machine_url.clone();
                 let ipfs_url = options.ipfs_url.as_str();
-                let connection = sqlite::open(options.db_file.clone()).unwrap();
+
                 let cartesi_machine_path = options.machine_dir.as_str();
 
-                let mut machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url)
+                let mut machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url.to_string())
                     .await
                     .unwrap();
                 let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
-                let state_cid = Cid::try_from(cid.to_string()).unwrap().to_bytes();
+                let state_cid = Cid::try_from(cid.to_string()).unwrap();
                 let mut block_info: &L1BlockInfo = &L1BlockInfo {
                     number: 0,
                     timestamp: U256([0; 4]),
@@ -160,10 +170,14 @@ async fn request_handler(
             let response = Response::new(Body::from(json_request));
             response
         }
-        (hyper::Method::GET, ["latest"]) => {
-            if options.compute_only {
+        (hyper::Method::GET, ["subscribe", appchain]) => {
+            if subscriptions
+                .lock()
+                .await
+                .contains(&Cid::try_from(appchain.to_string().clone()).unwrap())
+            {
                 let json_error = serde_json::json!({
-                    "error": "in compute only mode",
+                    "error": "subscription already exists",
                 });
                 let json_error = serde_json::to_string(&json_error).unwrap();
                 return Response::builder()
@@ -171,7 +185,40 @@ async fn request_handler(
                     .body(Body::from(json_error))
                     .unwrap();
             }
-            let connection = sqlite::open(options.db_file.clone()).unwrap();
+            let cid = Cid::try_from(appchain.to_string().clone()).unwrap();
+            subscriptions.lock().await.push(cid);
+            {
+                let connection =
+                    sqlite::open(format!("{}/subscriptions.db", options.db_path)).unwrap();
+                let mut statement = connection
+                    .prepare("INSERT INTO subscriptions (appchain_cid) VALUES (?)")
+                    .unwrap();
+                statement
+                    .bind((1, &cid.to_bytes() as &[u8]))
+                    .unwrap();
+                statement.next().unwrap();
+            }
+            start_subscriber(options, cid).await;
+            let json_request = r#"{"ok": "true"}"#;
+            let response = Response::new(Body::from(json_request));
+            response
+        }
+        (hyper::Method::GET, ["latest", appchain]) => {
+            if !subscriptions
+                .lock()
+                .await
+                .contains(&Cid::try_from(appchain.to_string().clone()).unwrap())
+            {
+                let json_error = serde_json::json!({
+                    "error": "no such subscription",
+                });
+                let json_error = serde_json::to_string(&json_error).unwrap();
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from(json_error))
+                    .unwrap();
+            }
+            let connection = sqlite::open(format!("{}/{}", options.db_path, appchain)).unwrap();
             let mut statement = connection
                 .prepare("SELECT * FROM blocks ORDER BY height DESC LIMIT 1")
                 .unwrap();
@@ -199,10 +246,14 @@ async fn request_handler(
                 .body(Body::from(json_error))
                 .unwrap();
         }
-        (hyper::Method::GET, ["block", height_number]) => {
-            if options.compute_only {
+        (hyper::Method::GET, ["block", appchain, height_number]) => {
+            if !subscriptions
+                .lock()
+                .await
+                .contains(&Cid::try_from(appchain.to_string().clone()).unwrap())
+            {
                 let json_error = serde_json::json!({
-                    "error": "in compute only mode",
+                    "error": "no such subscription",
                 });
                 let json_error = serde_json::to_string(&json_error).unwrap();
                 return Response::builder()
@@ -210,7 +261,7 @@ async fn request_handler(
                     .body(Body::from(json_error))
                     .unwrap();
             }
-            let connection = sqlite::open(options.db_file.clone()).unwrap();
+            let connection = sqlite::open(format!("{}/{}", options.db_path, appchain)).unwrap();
             let mut statement = connection
                 .prepare("SELECT * FROM blocks WHERE height=?")
                 .unwrap();
@@ -241,10 +292,14 @@ async fn request_handler(
                 .body(Body::from(json_error))
                 .unwrap();
         }
-        (hyper::Method::POST, ["submit"]) => {
-            if options.compute_only {
+        (hyper::Method::POST, ["submit", appchain]) => {
+            if !subscriptions
+                .lock()
+                .await
+                .contains(&Cid::try_from(appchain.to_string().clone()).unwrap())
+            {
                 let json_error = serde_json::json!({
-                    "error": "in compute only mode",
+                    "error": "no such subscription",
                 });
                 let json_error = serde_json::to_string(&json_error).unwrap();
                 return Response::builder()
@@ -260,7 +315,7 @@ async fn request_handler(
                 let https = HttpsConnector::new();
                 let client = Client::builder().build::<_, hyper::Body>(https);
 
-                let uri = format!("{}submit/submit", options.sequencer_url.clone())
+                let uri = format!("{}/submit/submit", options.sequencer_url.clone())
                     .parse()
                     .unwrap();
 
@@ -268,11 +323,10 @@ async fn request_handler(
                     .await
                     .unwrap()
                     .to_vec();
-                let appchain = options.appchain.clone();
 
                 let ipfs_client = IpfsClient::from_str(options.ipfs_url.clone().as_str()).unwrap();
                 let chain_info = ipfs_client
-                    .cat(&(appchain + "/app/chain-info.json"))
+                    .cat(&(appchain.to_string() + "/app/chain-info.json"))
                     .map_ok(|chunk| chunk.to_vec())
                     .try_concat()
                     .await
