@@ -219,9 +219,9 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
                                             Cid::try_from(current_cid.clone()).unwrap().to_string()
                                         );
                                     } else {
-                                        //TODO
-                                        panic!("execute failed");
+                                        tracing::info!("EXECUTE FAILED: reusing current_cid, as transaction failed");
                                     }
+                                    // XXX Is this right? Shouldn't this be after processing all tx'es?
                                     let mut statement = connection
                                         .prepare(
                                             "INSERT INTO blocks (state_cid, height) VALUES (?, ?)",
