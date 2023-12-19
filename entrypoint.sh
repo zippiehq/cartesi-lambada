@@ -72,7 +72,7 @@ fi
 mkdir -p /data/db
 mkdir -p /data/snapshot
 
-export CELESTIA_NODE_AUTH_TOKEN_READ=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJBbGxvdyI6WyJwdWJsaWMiLCJyZWFkIl19.hSz9VKPsE8GDF6Jf6vv3xTSfRccnubP2xF1wfHOsCNY
+export CELESTIA_NODE_AUTH_TOKEN_READ=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJBbGxvdyI6WyJwdWJsaWMiLCJyZWFkIl19.7ZUno9U-S6MfAc4m-5HpgHxt_yLmY1xGUjVqeglC-DI
 
 RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --sequencer-url $SEQUENCER_URL \
 	--machine-dir=/data/base-machines/lambada-base-machine \

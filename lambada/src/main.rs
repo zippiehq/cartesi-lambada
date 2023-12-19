@@ -52,7 +52,7 @@ async fn main() {
     let subscriptions = Arc::new(Mutex::new(subscriptions));
     // Make sure database is initalized and then load subscriptions from database
     {
-        let connection = sqlite::open(format!("{}/subscriptions.db", context.db_path)).unwrap();
+        let connection = sqlite::Connection::open_thread_safe(format!("{}/subscriptions.db", context.db_path)).unwrap();
         let query = "
             CREATE TABLE IF NOT EXISTS subscriptions (appchain_cid BLOB(48) NOT NULL);";
         connection.execute(query).unwrap();
@@ -112,12 +112,12 @@ async fn request_handler(
 
                 let cartesi_machine_path = options.machine_dir.as_str();
 
-                let mut machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url.to_string())
+                let machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url.to_string())
                     .await
                     .unwrap();
                 let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
                 let state_cid = Cid::try_from(cid.to_string()).unwrap();
-                let mut block_info: &L1BlockInfo = &L1BlockInfo {
+                let block_info: &L1BlockInfo = &L1BlockInfo {
                     number: 0,
                     timestamp: U256([0; 4]),
                     hash: H256([0; 32]),
@@ -189,7 +189,7 @@ async fn request_handler(
             subscriptions.lock().await.push(cid);
             {
                 let connection =
-                    sqlite::open(format!("{}/subscriptions.db", options.db_path)).unwrap();
+                sqlite::Connection::open_thread_safe(format!("{}/subscriptions.db", options.db_path)).unwrap();
                 let mut statement = connection
                     .prepare("INSERT INTO subscriptions (appchain_cid) VALUES (?)")
                     .unwrap();
@@ -218,7 +218,7 @@ async fn request_handler(
                     .body(Body::from(json_error))
                     .unwrap();
             }
-            let connection = sqlite::open(format!("{}/{}", options.db_path, appchain)).unwrap();
+            let connection = sqlite::Connection::open_thread_safe(format!("{}/{}", options.db_path, appchain)).unwrap();
             let mut statement = connection
                 .prepare("SELECT * FROM blocks ORDER BY height DESC LIMIT 1")
                 .unwrap();
@@ -261,7 +261,7 @@ async fn request_handler(
                     .body(Body::from(json_error))
                     .unwrap();
             }
-            let connection = sqlite::open(format!("{}/{}", options.db_path, appchain)).unwrap();
+            let connection = sqlite::Connection::open_thread_safe(format!("{}/{}", options.db_path, appchain)).unwrap();
             let mut statement = connection
                 .prepare("SELECT * FROM blocks WHERE height=?")
                 .unwrap();

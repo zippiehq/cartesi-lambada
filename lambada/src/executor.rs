@@ -9,22 +9,23 @@ type HotShotClient = surf_disco::Client<ServerError>;
 use base64::{engine::general_purpose, Engine};
 use cartesi_lambda::execute;
 use cartesi_machine_json_rpc::client::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
+use celestia_rpc::{BlobClient, HeaderClient};
+use celestia_types::nmt::Namespace;
 use cid::Cid;
 use ethers::prelude::*;
 use futures_util::TryStreamExt;
-use hotshot_query_service::availability::BlockQueryData;
+use hotshot_query_service::availability::{BlockQueryData, QueryablePayload};
 use hyper::Request;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use jf_primitives::merkle_tree::namespaced_merkle_tree::NamespaceProof;
 use jsonrpsee::http_client::{HeaderMap, HttpClientBuilder};
 use sequencer::SeqTypes;
+use sqlite::ConnectionThreadSafe;
 use sqlite::State;
 use std::{
-    sync::Arc,
-    time::{Duration, SystemTime},
+    sync::{Arc, Mutex},
+    time::SystemTime,
 };
-use celestia_rpc::{HeaderClient, BlobClient};
-use celestia_types::nmt::{Namespace};
 
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;
 #[derive(Clone, Debug)]
@@ -42,24 +43,23 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
     let sequencer_url = opt.sequencer_url.clone();
 
     // Make sure database is set up
-    let connection = sqlite::open(format!("{}/{}", opt.db_path, genesis_cid_text)).unwrap();
+    let connection = Arc::new(Mutex::new(
+        sqlite::Connection::open_thread_safe(format!("{}/{}", opt.db_path, genesis_cid_text))
+            .unwrap(),
+    ));
     let query = "
     CREATE TABLE IF NOT EXISTS blocks (state_cid BLOB(48) NOT NULL,
     height INTEGER NOT NULL);
 ";
-    connection.execute(query).unwrap();
-
-    let query_service_url = Url::parse(&sequencer_url)
-        .unwrap()
-        .join("availability")
-        .unwrap();
-
-    let mut machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url)
+    connection.lock().unwrap().execute(query).unwrap();
+    
+    let machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url)
         .await
         .unwrap();
 
     // Get the latest CID and height if one exists
-    let mut statement = connection
+    let sql_connection = connection.lock().unwrap();
+    let mut statement = sql_connection
         .prepare("SELECT * FROM blocks ORDER BY height DESC LIMIT 1")
         .unwrap();
 
@@ -78,8 +78,9 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
 
     let ipfs_client = IpfsClient::from_str(&opt.ipfs_url).unwrap();
     // Set what our current chain info is, so we can notice later on if it changes
-    let mut current_chain_info_cid: Option<Cid> = get_chain_info_cid(&opt, current_cid).await;
-    if current_chain_info_cid == None {
+    let current_chain_info_cid: Arc<Mutex<Option<Cid>>> =
+        Arc::new(Mutex::new(get_chain_info_cid(&opt, current_cid).await));
+    if *current_chain_info_cid.lock().unwrap() == None {
         tracing::debug!("not chain info found, leaving");
         return;
     }
@@ -142,217 +143,37 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
 
         tracing::info!("chain type: {:?}", r#type);
         match r#type.as_str() {
-            "sequencer" => {
-                let hotshot = HotShotClient::new(query_service_url.clone());
-                hotshot.connect(None).await;
+            "espresso" => {
+                let chain_info_cid = Arc::clone(&current_chain_info_cid);
+                let sql_connection = Arc::clone(&connection);
 
-                let mut block_query_stream = hotshot
-                    .socket(format!("stream/blocks/{}", current_height).as_str())
-                    .subscribe()
-                    .await
-                    .expect("Unable to subscribe to HotShot block stream");
-
-                while let Some(block_data) = block_query_stream.next().await {
-                    match block_data {
-                        Ok(block) => {
-                            let new_chain_info = get_chain_info_cid(&opt, current_cid).await;
-                            if new_chain_info == None {
-                                tracing::error!("No chain info found, leaving");
-                                return;
-                            }
-                            if new_chain_info != current_chain_info_cid {
-                                current_chain_info_cid = new_chain_info;
-                                tracing::error!("No support for changing chain info yet");
-                                return;
-                            }
-
-                            let block: BlockQueryData<SeqTypes> = block;
-                            let payload = block.payload();
-
-                            let proof = payload.get_namespace_proof(VmId::from(chain_vm_id));
-                            let transactions = proof.get_namespace_leaves();
-
-                            let mut block_info: L1BlockInfo = L1BlockInfo {
-                                number: 0,
-                                timestamp: U256([0; 4]),
-                                hash: H256([0; 32]),
-                            };
-
-                            if let Some(info) = block.header().l1_finalized {
-                                block_info = info;
-                            }
-
-                            let height = block.height();
-                            let timestamp = block.header().timestamp as u64;
-                            let mut statement = connection
-                                .prepare("SELECT * FROM blocks WHERE height=?")
-                                .unwrap();
-                            statement.bind((1, height as i64)).unwrap();
-
-                            if let Ok(state) = statement.next() {
-                                // We've not processed this block before, so let's process it (can we even end here since we set starting point?)
-                                if state == State::Done {
-                                    for (index, tx) in transactions.into_iter().enumerate() {
-                                        // don't need this check anymore?
-                                        if u64::from(tx.vm()) as u64 == chain_vm_id {
-                                            tracing::info!("found tx for our vm id");
-                                            tracing::info!(
-                                                "tx.payload().len: {:?}",
-                                                tx.payload().len()
-                                            );
-
-                                            let forked_machine_url =
-                                                format!("http://{}", machine.fork().await.unwrap());
-
-                                            let time_before_execute = SystemTime::now();
-
-                                            let result = execute(
-                                                forked_machine_url,
-                                                &opt.base_cartesi_machine_path,
-                                                opt.ipfs_url.as_str(),
-                                                tx.payload().to_vec(),
-                                                current_cid.clone(),
-                                                &block_info,
-                                            )
-                                            .await;
-                                            let time_after_execute = SystemTime::now();
-
-                                            tracing::info!(
-                                                "executing time {}",
-                                                time_after_execute
-                                                    .duration_since(time_before_execute)
-                                                    .unwrap()
-                                                    .as_millis()
-                                            );
-
-                                            if let Ok(cid) = result {
-                                                tracing::info!(
-                                                    "old current_cid {:?}",
-                                                    Cid::try_from(current_cid.clone())
-                                                        .unwrap()
-                                                        .to_string()
-                                                );
-                                                current_cid = cid;
-                                                tracing::info!(
-                                                    "resulted current_cid {:?}",
-                                                    Cid::try_from(current_cid.clone())
-                                                        .unwrap()
-                                                        .to_string()
-                                                );
-                                            } else {
-                                                //TODO
-                                                panic!("execute failed");
-                                            }
-                                            let mut statement = connection
-                                        .prepare(
-                                            "INSERT INTO blocks (state_cid, height) VALUES (?, ?)",
-                                        )
-                                        .unwrap();
-                                            statement
-                                                .bind((1, &current_cid.to_bytes() as &[u8]))
-                                                .unwrap();
-                                            statement.bind((2, height as i64)).unwrap();
-                                            statement.next().unwrap();
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            tracing::error!("Error in HotShot block stream, retrying: {err}");
-                            continue;
-                        }
-                    };
-                }
+                subscribe_espresso(
+                    &machine,
+                    sequencer_url.as_str(),
+                    current_height,
+                    opt.clone(),
+                    &mut current_cid,
+                    chain_info_cid,
+                    chain_vm_id,
+                    sql_connection,
+                )
+                .await;
             }
             "celestia" => {
-                let token = std::env::var("CELESTIA_NODE_AUTH_TOKEN_READ").unwrap();
-            
-                let client = celestia_rpc::Client::new(sequencer_url.clone().as_str(), Some(token.as_str())).await.unwrap();
+                let chain_info_cid = Arc::clone(&current_chain_info_cid);
+                let sql_connection = Arc::clone(&connection);
 
-                match client.header_wait_for_height(1).await{
-                    Ok(_) => {
-                        let mut state = client.header_sync_state().await.unwrap();
-                        while client
-                            .header_wait_for_height(state.height + 1)
-                            .await
-                            .is_ok()
-                        {
-                            let block_info: &L1BlockInfo = &L1BlockInfo {
-                                number: 0,
-                                timestamp: U256([0; 4]),
-                                hash: H256([0; 32]),
-                            };
-                            match client
-                                .blob_get_all(
-                                    state.height,
-                                    &[Namespace::new_v0(&chain_vm_id.to_be_bytes()).unwrap()],
-                                )
-                                .await
-                            {
-                                Ok(blobs) => {
-                                    for blob in blobs {
-                                        tracing::info!("new blob {:?}", blob);
-                                        let forked_machine_url =
-                                            format!("http://{}", machine.fork().await.unwrap());
-
-                                        let time_before_execute = SystemTime::now();
-
-                                        let result = execute(
-                                            forked_machine_url,
-                                            &opt.base_cartesi_machine_path,
-                                            opt.ipfs_url.as_str(),
-                                            blob.data,
-                                            current_cid.clone(),
-                                            block_info,
-                                        )
-                                        .await;
-                                        let time_after_execute = SystemTime::now();
-
-                                        tracing::info!(
-                                            "executing time {}",
-                                            time_after_execute
-                                                .duration_since(time_before_execute)
-                                                .unwrap()
-                                                .as_millis()
-                                        );
-                                        if let Ok(cid) = result {
-                                            tracing::info!(
-                                                "old current_cid {:?}",
-                                                Cid::try_from(current_cid.clone())
-                                                    .unwrap()
-                                                    .to_string()
-                                            );
-                                            current_cid = cid;
-                                            tracing::info!(
-                                                "resulted current_cid {:?}",
-                                                Cid::try_from(current_cid.clone())
-                                                    .unwrap()
-                                                    .to_string()
-                                            );
-                                        } else {
-                                            //TODO
-                                            panic!("execute failed");
-                                        }
-                                        let mut statement = connection
-                                    .prepare("INSERT INTO blocks (state_cid, height) VALUES (?, ?)")
-                                    .unwrap();
-                                        statement
-                                            .bind((1, &current_cid.to_bytes() as &[u8]))
-                                            .unwrap();
-                                        statement.bind((2, state.height as i64)).unwrap();
-                                        statement.next().unwrap();
-                                    }
-                                }
-                                Err(e) => {}
-                            }
-                            state = client.header_sync_state().await.unwrap();
-                        }
-                    }
-                    Err(e) => {
-                        tracing::info!("Error: {:?}", e);
-                    }
-                }
+                subscribe_celestia(
+                    &machine,
+                    sequencer_url.clone(),
+                    current_height,
+                    chain_info_cid,
+                    opt.clone(),
+                    &mut current_cid,
+                    chain_vm_id,
+                    sql_connection,
+                )
+                .await;
             }
             _ => {
                 tracing::info!("unknown sequencer type");
@@ -393,6 +214,236 @@ async fn get_chain_info_cid(opt: &ExecutorOptions, current_cid: Cid) -> Option<C
             .unwrap();
             Some(response_cid_value)
         }
-        Err(e) => None,
+        Err(_) => None,
+    }
+}
+
+async fn handle_tx(
+    machine: &JsonRpcCartesiMachineClient,
+    opt: ExecutorOptions,
+    data: Vec<u8>,
+    current_cid: &mut Cid,
+    block_info: &L1BlockInfo,
+    connection: Arc<Mutex<ConnectionThreadSafe>>,
+    height: u64,
+) {
+    let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
+
+    let time_before_execute = SystemTime::now();
+
+    let result = execute(
+        forked_machine_url,
+        &opt.base_cartesi_machine_path,
+        opt.ipfs_url.as_str(),
+        data,
+        current_cid.clone(),
+        block_info,
+    )
+    .await;
+    let time_after_execute = SystemTime::now();
+
+    tracing::info!(
+        "executing time {}",
+        time_after_execute
+            .duration_since(time_before_execute)
+            .unwrap()
+            .as_millis()
+    );
+    if let Ok(cid) = result {
+        tracing::info!(
+            "old current_cid {:?}",
+            Cid::try_from(current_cid.clone()).unwrap().to_string()
+        );
+        *current_cid = cid;
+        tracing::info!(
+            "resulted current_cid {:?}",
+            Cid::try_from(current_cid.clone()).unwrap().to_string()
+        );
+    } else {
+        //TODO
+        panic!("execute failed");
+    }
+    let sql_connection = connection.lock().unwrap();
+    let mut statement = sql_connection
+        .prepare("INSERT INTO blocks (state_cid, height) VALUES (?, ?)")
+        .unwrap();
+    statement
+        .bind((1, &current_cid.to_bytes() as &[u8]))
+        .unwrap();
+    statement.bind((2, height as i64)).unwrap();
+    statement.next().unwrap();
+}
+
+async fn is_chain_info_same(
+    opt: ExecutorOptions,
+    current_cid: Cid,
+    current_chain_info_cid: Arc<Mutex<Option<Cid>>>,
+) -> bool {
+    let new_chain_info = get_chain_info_cid(&opt, current_cid).await;
+    if new_chain_info == None {
+        tracing::error!("No chain info found, leaving");
+        return false;
+    }
+    if new_chain_info != *current_chain_info_cid.lock().unwrap() {
+        *current_chain_info_cid.lock().unwrap() = new_chain_info;
+        tracing::error!("No support for changing chain info yet");
+        return false;
+    }
+
+    return true;
+}
+
+async fn subscribe_espresso(
+    machine: &JsonRpcCartesiMachineClient,
+    sequencer_url: &str,
+    current_height: u64,
+    opt: ExecutorOptions,
+    current_cid: &mut Cid,
+    current_chain_info_cid: Arc<Mutex<Option<Cid>>>,
+    chain_vm_id: u64,
+    connection: Arc<Mutex<ConnectionThreadSafe>>,
+) {
+    let query_service_url = Url::parse(&sequencer_url)
+        .unwrap()
+        .join("availability")
+        .unwrap();
+
+    let hotshot = HotShotClient::new(query_service_url);
+    hotshot.connect(None).await;
+
+    let mut block_query_stream = hotshot
+        .socket(format!("stream/blocks/{}", current_height).as_str())
+        .subscribe()
+        .await
+        .expect("Unable to subscribe to HotShot block stream");
+    while let Some(block_data) = block_query_stream.next().await {
+        match block_data {
+            Ok(block) => {
+
+                let chain_info_cid = Arc::clone(&current_chain_info_cid);
+
+                if !is_chain_info_same(opt.clone(), *current_cid, chain_info_cid).await {
+                    return;
+                }
+
+                let block: BlockQueryData<SeqTypes> = block;
+                let payload = block.payload();
+
+                let proof = payload.get_namespace_proof(VmId::from(chain_vm_id));
+                let transactions = proof.get_namespace_leaves();
+
+                let mut block_info: L1BlockInfo = L1BlockInfo {
+                    number: 0,
+                    timestamp: U256([0; 4]),
+                    hash: H256([0; 32]),
+                };
+
+                if let Some(info) = block.header().l1_finalized {
+                    block_info = info;
+                }
+
+                let height = block.height();
+                let sql_connection = connection.lock().unwrap();
+                let mut statement = sql_connection
+                    .prepare("SELECT * FROM blocks WHERE height=?")
+                    .unwrap();
+                statement.bind((1, height as i64)).unwrap();
+
+                if let Ok(state) = statement.next() {
+                    // We've not processed this block before, so let's process it (can we even end here since we set starting point?)
+                    if state == State::Done {
+                        for (_, tx) in transactions.into_iter().enumerate() {
+                            tracing::info!("tx.payload().len: {:?}", tx.payload().len());
+
+                            handle_tx(
+                                &machine,
+                                opt.clone(),
+                                tx.payload().to_vec(),
+                                current_cid,
+                                &block_info,
+                                Arc::clone(&connection),
+                                height,
+                            )
+                            .await;
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::error!("Error in HotShot block stream, retrying: {err}");
+                continue;
+            }
+        };
+    }
+    tracing::info!("finished");
+
+}
+async fn subscribe_celestia(
+    machine: &JsonRpcCartesiMachineClient,
+    sequencer_url: String,
+    current_height: u64,
+    current_chain_info_cid: Arc<Mutex<Option<cid::CidGeneric<64>>>>,
+    opt: ExecutorOptions,
+    current_cid: &mut Cid,
+    chain_vm_id: u64,
+    connection: Arc<Mutex<ConnectionThreadSafe>>,
+) {
+    let token = std::env::var("CELESTIA_NODE_AUTH_TOKEN_READ").unwrap();
+
+    let client = celestia_rpc::Client::new(sequencer_url.as_str(), Some(token.as_str()))
+        .await
+        .unwrap();
+    let current_height = if current_height == 0 {
+        1
+    } else {
+        current_height
+    };
+    match client.header_wait_for_height(current_height).await {
+        Ok(_) => {
+            let mut state = client.header_sync_state().await.unwrap();
+            while client
+                .header_wait_for_height(state.height + 1)
+                .await
+                .is_ok()
+            {
+                let chain_info_cid = Arc::clone(&current_chain_info_cid);
+                if !is_chain_info_same(opt.clone(), *current_cid, chain_info_cid).await {
+                    break;
+                }
+                let block_info: &L1BlockInfo = &L1BlockInfo {
+                    number: 0,
+                    timestamp: U256([0; 4]),
+                    hash: H256([0; 32]),
+                };
+                match client
+                    .blob_get_all(
+                        state.height,
+                        &[Namespace::new_v0(&chain_vm_id.to_be_bytes()).unwrap()],
+                    )
+                    .await
+                {
+                    Ok(blobs) => {
+                        for blob in blobs {
+                            tracing::info!("new blob {:?}", blob);
+                            handle_tx(
+                                &machine,
+                                opt.clone(),
+                                blob.data,
+                                current_cid,
+                                block_info,
+                                Arc::clone(&connection),
+                                state.height,
+                            )
+                            .await;
+                        }
+                    }
+                    Err(_) => {}
+                }
+                state = client.header_sync_state().await.unwrap();
+            }
+        }
+        Err(e) => {
+            tracing::info!("Error: {:?}", e);
+        }
     }
 }
