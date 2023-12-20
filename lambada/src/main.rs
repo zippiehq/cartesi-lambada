@@ -19,12 +19,13 @@ use serde::{Deserialize, Serialize};
 use sqlite::State;
 use std::io::Cursor;
 use std::sync::Arc;
-use std::{convert::Infallible};
+use std::convert::Infallible;
 use rand::Rng;
 
 async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
     let executor_options = ExecutorOptions {
-        sequencer_url: options.sequencer_url.clone(),
+        espresso_testnet_sequencer_url: options.espresso_testnet_sequencer_url.clone(),
+        celestia_testnet_sequencer_url: options.celestia_testnet_sequencer_url.clone(),
         ipfs_url: options.ipfs_url.clone(),
         db_path: options.db_path.clone(),
         base_cartesi_machine_path: options.machine_dir.clone(),
@@ -54,7 +55,7 @@ async fn main() {
     let subscriptions = Arc::new(Mutex::new(subscriptions));
     // Make sure database is initalized and then load subscriptions from database
     {
-        let connection = sqlite::open(format!("{}/subscriptions.db", context.db_path)).unwrap();
+        let connection = sqlite::Connection::open_thread_safe(format!("{}/subscriptions.db", context.db_path)).unwrap();
         let query = "
             CREATE TABLE IF NOT EXISTS subscriptions (appchain_cid BLOB(48) NOT NULL);";
         connection.execute(query).unwrap();
@@ -114,12 +115,12 @@ async fn request_handler(
 
                 let cartesi_machine_path = options.machine_dir.as_str();
 
-                let mut machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url.to_string())
+                let machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url.to_string())
                     .await
                     .unwrap();
                 let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
                 let state_cid = Cid::try_from(cid.to_string()).unwrap();
-                let mut block_info: &L1BlockInfo = &L1BlockInfo {
+                let block_info: &L1BlockInfo = &L1BlockInfo {
                     number: 0,
                     timestamp: U256([0; 4]),
                     hash: H256([0; 32]),
@@ -191,7 +192,7 @@ async fn request_handler(
             subscriptions.lock().await.push(cid);
             {
                 let connection =
-                    sqlite::open(format!("{}/subscriptions.db", options.db_path)).unwrap();
+                sqlite::Connection::open_thread_safe(format!("{}/subscriptions.db", options.db_path)).unwrap();
                 let mut statement = connection
                     .prepare("INSERT INTO subscriptions (appchain_cid) VALUES (?)")
                     .unwrap();
@@ -220,7 +221,7 @@ async fn request_handler(
                     .body(Body::from(json_error))
                     .unwrap();
             }
-            let connection = sqlite::open(format!("{}/{}", options.db_path, appchain)).unwrap();
+            let connection = sqlite::Connection::open_thread_safe(format!("{}/{}", options.db_path, appchain)).unwrap();
             let mut statement = connection
                 .prepare("SELECT * FROM blocks ORDER BY height DESC LIMIT 1")
                 .unwrap();
@@ -263,7 +264,7 @@ async fn request_handler(
             let https = HttpsConnector::new();
             let client = Client::builder().build::<_, hyper::Body>(https);
 
-            let uri: String = format!("{}/status/latest_block_height", options.sequencer_url.clone())
+            let uri: String = format!("{}/status/latest_block_height", options.espresso_testnet_sequencer_url.clone())
                 .parse()
                 .unwrap();
 
@@ -314,7 +315,7 @@ async fn request_handler(
                     .body(Body::from(json_error))
                     .unwrap();
             }
-            let connection = sqlite::open(format!("{}/{}", options.db_path, appchain)).unwrap();
+            let connection = sqlite::Connection::open_thread_safe(format!("{}/{}", options.db_path, appchain)).unwrap();
             let mut statement = connection
                 .prepare("SELECT * FROM blocks WHERE height=?")
                 .unwrap();
@@ -368,7 +369,7 @@ async fn request_handler(
                 let https = HttpsConnector::new();
                 let client = Client::builder().build::<_, hyper::Body>(https);
 
-                let uri = format!("{}/submit/submit", options.sequencer_url.clone())
+                let uri = format!("{}/submit/submit", options.espresso_testnet_sequencer_url.clone())
                     .parse()
                     .unwrap();
 
