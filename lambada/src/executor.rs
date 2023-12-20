@@ -42,7 +42,9 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
     let sequencer_url = opt.sequencer_url.clone();
 
     // Make sure database is set up
-    let connection = sqlite::Connection::open_thread_safe(format!("{}/{}", opt.db_path, genesis_cid_text)).unwrap();
+    let connection =
+        sqlite::Connection::open_thread_safe(format!("{}/{}", opt.db_path, genesis_cid_text))
+            .unwrap();
     let query = "
     CREATE TABLE IF NOT EXISTS blocks (state_cid BLOB(48) NOT NULL,
     height INTEGER NOT NULL);
@@ -149,7 +151,7 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
                     &mut current_cid,
                     chain_info_cid,
                     chain_vm_id,
-                    genesis_cid_text.clone()
+                    genesis_cid_text.clone(),
                 )
                 .await;
             }
@@ -164,7 +166,7 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
                     opt.clone(),
                     &mut current_cid,
                     chain_vm_id,
-                    genesis_cid_text.clone()
+                    genesis_cid_text.clone(),
                 )
                 .await;
             }
@@ -256,7 +258,9 @@ async fn handle_tx(
         //TODO
         panic!("execute failed");
     }
-    let connection = sqlite::Connection::open_thread_safe(format!("{}/{}", opt.db_path, genesis_cid_text)).unwrap();
+    let connection =
+        sqlite::Connection::open_thread_safe(format!("{}/{}", opt.db_path, genesis_cid_text))
+            .unwrap();
 
     let mut statement = connection
         .prepare("INSERT INTO blocks (state_cid, height) VALUES (?, ?)")
@@ -295,7 +299,7 @@ async fn subscribe_espresso(
     current_cid: &mut Cid,
     current_chain_info_cid: Arc<Mutex<Option<Cid>>>,
     chain_vm_id: u64,
-    genesis_cid_text: String
+    genesis_cid_text: String,
 ) {
     let query_service_url = Url::parse(&sequencer_url)
         .unwrap()
@@ -337,7 +341,11 @@ async fn subscribe_espresso(
 
                 let height = block.height();
 
-                let connection = sqlite::Connection::open_thread_safe(format!("{}/{}", opt.db_path, genesis_cid_text)).unwrap();
+                let connection = sqlite::Connection::open_thread_safe(format!(
+                    "{}/{}",
+                    opt.db_path, genesis_cid_text
+                ))
+                .unwrap();
                 let mut statement = connection
                     .prepare("SELECT * FROM blocks WHERE height=?")
                     .unwrap();
@@ -356,7 +364,7 @@ async fn subscribe_espresso(
                                 current_cid,
                                 &block_info,
                                 height,
-                                genesis_cid_text.clone()
+                                genesis_cid_text.clone(),
                             )
                             .await;
                         }
@@ -379,10 +387,9 @@ async fn subscribe_celestia(
     opt: ExecutorOptions,
     current_cid: &mut Cid,
     chain_vm_id: u64,
-    genesis_cid_text: String
+    genesis_cid_text: String,
 ) {
     let token = std::env::var("CELESTIA_NODE_AUTH_TOKEN_READ").unwrap();
-
     let client = celestia_rpc::Client::new(sequencer_url.as_str(), Some(token.as_str()))
         .await
         .unwrap();
@@ -416,18 +423,33 @@ async fn subscribe_celestia(
                     .await
                 {
                     Ok(blobs) => {
-                        for blob in blobs {
-                            tracing::info!("new blob {:?}", blob);
-                            handle_tx(
-                                &machine,
-                                opt.clone(),
-                                blob.data,
-                                current_cid,
-                                block_info,
-                                state.height,
-                                genesis_cid_text.clone()
-                            )
-                            .await;
+                        let connection = sqlite::Connection::open_thread_safe(format!(
+                            "{}/{}",
+                            opt.db_path, genesis_cid_text
+                        ))
+                        .unwrap();
+                        let mut statement = connection
+                            .prepare("SELECT * FROM blocks WHERE height=?")
+                            .unwrap();
+                        statement.bind((1, state.height as i64)).unwrap();
+
+                        if let Ok(statement_state) = statement.next() {
+                            // We've not processed this block before, so let's process it (can we even end here since we set starting point?)
+                            if statement_state == State::Done {
+                                for blob in blobs {
+                                    tracing::info!("new blob {:?}", blob);
+                                    handle_tx(
+                                        &machine,
+                                        opt.clone(),
+                                        blob.data,
+                                        current_cid,
+                                        block_info,
+                                        state.height,
+                                        genesis_cid_text.clone(),
+                                    )
+                                    .await;
+                                }
+                            }
                         }
                     }
                     Err(_) => {}

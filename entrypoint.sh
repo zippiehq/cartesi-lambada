@@ -66,13 +66,13 @@ if [ ! -e /data/base-machines/lambada-base-machine ]; then
 fi
 
 if [ x$SEQUENCER_URL = x ]; then
-   SEQUENCER_URL=https://espresso.tspre.org
+   SEQUENCER_URL=http://0.0.0.0:26658
 fi
 
 mkdir -p /data/db
 mkdir -p /data/snapshot
 
-export CELESTIA_NODE_AUTH_TOKEN_READ=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJBbGxvdyI6WyJwdWJsaWMiLCJyZWFkIl19.7ZUno9U-S6MfAc4m-5HpgHxt_yLmY1xGUjVqeglC-DI
+export CELESTIA_NODE_AUTH_TOKEN_READ=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJBbGxvdyI6WyJwdWJsaWMiLCJyZWFkIl19.6n3dI-JyufkUc64A9E_gYjRqf6yXcUFiPA8xNU34LHU
 
 RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --sequencer-url $SEQUENCER_URL \
 	--machine-dir=/data/base-machines/lambada-base-machine \
