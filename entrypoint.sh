@@ -65,16 +65,19 @@ if [ ! -e /data/base-machines/lambada-base-machine ]; then
    cd /
 fi
 
-if [ x$SEQUENCER_URL = x ]; then
-   SEQUENCER_URL=http://0.0.0.0:26658
+if [ x$ESPRESSO_TESTNET_SEQUENCER_URL = x ]; then
+   ESPRESSO_TESTNET_SEQUENCER_URL=https://espresso.tspre.org
+fi
+
+if [ x$CELESTIA_TESTNET_SEQUENCER_URL = x ]; then
+   CELESTIA_TESTNET_SEQUENCER_URL=http://0.0.0.0:26658
 fi
 
 mkdir -p /data/db
 mkdir -p /data/snapshot
 
-export CELESTIA_NODE_AUTH_TOKEN_READ=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJBbGxvdyI6WyJwdWJsaWMiLCJyZWFkIl19.6n3dI-JyufkUc64A9E_gYjRqf6yXcUFiPA8xNU34LHU
-
-RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --sequencer-url $SEQUENCER_URL \
+RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --espresso-testnet-sequencer-url $ESPRESSO_TESTNET_SEQUENCER_URL \
+	--celestia-testnet-sequencer-url $CELESTIA_TESTNET_SEQUENCER_URL \
 	--machine-dir=/data/base-machines/lambada-base-machine \
 	--ipfs-url $IPFS_URL \
 	--cartesi-machine-url $CARTESI_MACHINE_URL \

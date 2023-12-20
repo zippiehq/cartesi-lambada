@@ -19,12 +19,13 @@ use serde::{Deserialize, Serialize};
 use sqlite::State;
 use std::io::Cursor;
 use std::sync::Arc;
-use std::{convert::Infallible};
+use std::convert::Infallible;
 use rand::Rng;
 
 async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
     let executor_options = ExecutorOptions {
-        sequencer_url: options.sequencer_url.clone(),
+        espresso_testnet_sequencer_url: options.espresso_testnet_sequencer_url.clone(),
+        celestia_testnet_sequencer_url: options.celestia_testnet_sequencer_url.clone(),
         ipfs_url: options.ipfs_url.clone(),
         db_path: options.db_path.clone(),
         base_cartesi_machine_path: options.machine_dir.clone(),
@@ -263,7 +264,7 @@ async fn request_handler(
             let https = HttpsConnector::new();
             let client = Client::builder().build::<_, hyper::Body>(https);
 
-            let uri: String = format!("{}/status/latest_block_height", options.sequencer_url.clone())
+            let uri: String = format!("{}/status/latest_block_height", options.espresso_testnet_sequencer_url.clone())
                 .parse()
                 .unwrap();
 
@@ -368,7 +369,7 @@ async fn request_handler(
                 let https = HttpsConnector::new();
                 let client = Client::builder().build::<_, hyper::Body>(https);
 
-                let uri = format!("{}/submit/submit", options.sequencer_url.clone())
+                let uri = format!("{}/submit/submit", options.espresso_testnet_sequencer_url.clone())
                     .parse()
                     .unwrap();
 

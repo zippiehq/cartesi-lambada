@@ -4962,7 +4962,6 @@ version = "0.1.0"
 dependencies = [
  "async-compatibility-layer",
  "async-std",
- "base64 0.21.5",
  "bincode",
  "cartesi-machine-json-rpc",
  "cartesi_lambda",
@@ -4981,7 +4980,6 @@ dependencies = [
  "ipfs-api-backend-hyper",
  "jf-primitives",
  "rand 0.8.5",
- "jsonrpsee 0.18.2",
  "sequencer",
  "serde",
  "serde_json",

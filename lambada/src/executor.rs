@@ -1,24 +1,20 @@
-use hyper::client::conn::Connection;
-use hyper::{header, header::HeaderValue};
 use sequencer::{L1BlockInfo, VmId};
 use surf_disco::Url;
-use tide_disco::{error::ServerError, Error};
+use tide_disco::error::ServerError;
 
 type HotShotClient = surf_disco::Client<ServerError>;
 
-use base64::{engine::general_purpose, Engine};
 use cartesi_lambda::execute;
-use cartesi_machine_json_rpc::client::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
+use cartesi_machine_json_rpc::client::JsonRpcCartesiMachineClient;
 use celestia_rpc::{BlobClient, HeaderClient};
 use celestia_types::nmt::Namespace;
 use cid::Cid;
 use ethers::prelude::*;
 use futures_util::TryStreamExt;
-use hotshot_query_service::availability::{BlockQueryData, QueryablePayload};
+use hotshot_query_service::availability::BlockQueryData;
 use hyper::Request;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use jf_primitives::merkle_tree::namespaced_merkle_tree::NamespaceProof;
-use jsonrpsee::http_client::{HeaderMap, HttpClientBuilder};
 use sequencer::SeqTypes;
 use sqlite::State;
 use std::{
@@ -29,7 +25,8 @@ use std::{
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;
 #[derive(Clone, Debug)]
 pub struct ExecutorOptions {
-    pub sequencer_url: String,
+    pub espresso_testnet_sequencer_url: String,
+    pub celestia_testnet_sequencer_url: String,
     pub ipfs_url: String,
     pub db_path: String,
     pub base_cartesi_machine_path: String,
@@ -39,7 +36,8 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
     let mut current_cid = appchain.clone();
     let genesis_cid_text = current_cid.to_string();
     let mut current_height: u64 = u64::MAX;
-    let sequencer_url = opt.sequencer_url.clone();
+    let espresso_testnet_sequencer_url = opt.espresso_testnet_sequencer_url.clone();
+    let celestia_testnet_sequencer_url = opt.celestia_testnet_sequencer_url.clone();
 
     // Make sure database is set up
     let connection =
@@ -145,7 +143,7 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
 
                 subscribe_espresso(
                     &machine,
-                    sequencer_url.as_str(),
+                    espresso_testnet_sequencer_url.as_str(),
                     current_height,
                     opt.clone(),
                     &mut current_cid,
@@ -160,7 +158,7 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
 
                 subscribe_celestia(
                     &machine,
-                    sequencer_url.clone(),
+                    celestia_testnet_sequencer_url.clone(),
                     current_height,
                     chain_info_cid,
                     opt.clone(),
@@ -389,7 +387,10 @@ async fn subscribe_celestia(
     chain_vm_id: u64,
     genesis_cid_text: String,
 ) {
-    let token = std::env::var("CELESTIA_NODE_AUTH_TOKEN_READ").unwrap();
+    let token = match std::env::var("CELESTIA_TESTNET_NODE_AUTH_TOKEN_READ"){
+        Ok(token) => token,
+        Err(_) => return,
+    };
     let client = celestia_rpc::Client::new(sequencer_url.as_str(), Some(token.as_str()))
         .await
         .unwrap();
