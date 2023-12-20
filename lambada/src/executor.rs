@@ -20,7 +20,6 @@ use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use jf_primitives::merkle_tree::namespaced_merkle_tree::NamespaceProof;
 use jsonrpsee::http_client::{HeaderMap, HttpClientBuilder};
 use sequencer::SeqTypes;
-use sqlite::ConnectionThreadSafe;
 use sqlite::State;
 use std::{
     sync::{Arc, Mutex},
@@ -43,23 +42,19 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
     let sequencer_url = opt.sequencer_url.clone();
 
     // Make sure database is set up
-    let connection = Arc::new(Mutex::new(
-        sqlite::Connection::open_thread_safe(format!("{}/{}", opt.db_path, genesis_cid_text))
-            .unwrap(),
-    ));
+    let connection = sqlite::Connection::open_thread_safe(format!("{}/{}", opt.db_path, genesis_cid_text)).unwrap();
     let query = "
     CREATE TABLE IF NOT EXISTS blocks (state_cid BLOB(48) NOT NULL,
     height INTEGER NOT NULL);
 ";
-    connection.lock().unwrap().execute(query).unwrap();
-    
+    connection.execute(query).unwrap();
+
     let machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url)
         .await
         .unwrap();
 
     // Get the latest CID and height if one exists
-    let sql_connection = connection.lock().unwrap();
-    let mut statement = sql_connection
+    let mut statement = connection
         .prepare("SELECT * FROM blocks ORDER BY height DESC LIMIT 1")
         .unwrap();
 
@@ -145,7 +140,6 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
         match r#type.as_str() {
             "espresso" => {
                 let chain_info_cid = Arc::clone(&current_chain_info_cid);
-                let sql_connection = Arc::clone(&connection);
 
                 subscribe_espresso(
                     &machine,
@@ -155,13 +149,12 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
                     &mut current_cid,
                     chain_info_cid,
                     chain_vm_id,
-                    sql_connection,
+                    genesis_cid_text.clone()
                 )
                 .await;
             }
             "celestia" => {
                 let chain_info_cid = Arc::clone(&current_chain_info_cid);
-                let sql_connection = Arc::clone(&connection);
 
                 subscribe_celestia(
                     &machine,
@@ -171,7 +164,7 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
                     opt.clone(),
                     &mut current_cid,
                     chain_vm_id,
-                    sql_connection,
+                    genesis_cid_text.clone()
                 )
                 .await;
             }
@@ -224,8 +217,8 @@ async fn handle_tx(
     data: Vec<u8>,
     current_cid: &mut Cid,
     block_info: &L1BlockInfo,
-    connection: Arc<Mutex<ConnectionThreadSafe>>,
     height: u64,
+    genesis_cid_text: String,
 ) {
     let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
 
@@ -263,8 +256,9 @@ async fn handle_tx(
         //TODO
         panic!("execute failed");
     }
-    let sql_connection = connection.lock().unwrap();
-    let mut statement = sql_connection
+    let connection = sqlite::Connection::open_thread_safe(format!("{}/{}", opt.db_path, genesis_cid_text)).unwrap();
+
+    let mut statement = connection
         .prepare("INSERT INTO blocks (state_cid, height) VALUES (?, ?)")
         .unwrap();
     statement
@@ -301,7 +295,7 @@ async fn subscribe_espresso(
     current_cid: &mut Cid,
     current_chain_info_cid: Arc<Mutex<Option<Cid>>>,
     chain_vm_id: u64,
-    connection: Arc<Mutex<ConnectionThreadSafe>>,
+    genesis_cid_text: String
 ) {
     let query_service_url = Url::parse(&sequencer_url)
         .unwrap()
@@ -319,7 +313,6 @@ async fn subscribe_espresso(
     while let Some(block_data) = block_query_stream.next().await {
         match block_data {
             Ok(block) => {
-
                 let chain_info_cid = Arc::clone(&current_chain_info_cid);
 
                 if !is_chain_info_same(opt.clone(), *current_cid, chain_info_cid).await {
@@ -343,8 +336,9 @@ async fn subscribe_espresso(
                 }
 
                 let height = block.height();
-                let sql_connection = connection.lock().unwrap();
-                let mut statement = sql_connection
+
+                let connection = sqlite::Connection::open_thread_safe(format!("{}/{}", opt.db_path, genesis_cid_text)).unwrap();
+                let mut statement = connection
                     .prepare("SELECT * FROM blocks WHERE height=?")
                     .unwrap();
                 statement.bind((1, height as i64)).unwrap();
@@ -361,8 +355,8 @@ async fn subscribe_espresso(
                                 tx.payload().to_vec(),
                                 current_cid,
                                 &block_info,
-                                Arc::clone(&connection),
                                 height,
+                                genesis_cid_text.clone()
                             )
                             .await;
                         }
@@ -376,7 +370,6 @@ async fn subscribe_espresso(
         };
     }
     tracing::info!("finished");
-
 }
 async fn subscribe_celestia(
     machine: &JsonRpcCartesiMachineClient,
@@ -386,7 +379,7 @@ async fn subscribe_celestia(
     opt: ExecutorOptions,
     current_cid: &mut Cid,
     chain_vm_id: u64,
-    connection: Arc<Mutex<ConnectionThreadSafe>>,
+    genesis_cid_text: String
 ) {
     let token = std::env::var("CELESTIA_NODE_AUTH_TOKEN_READ").unwrap();
 
@@ -431,8 +424,8 @@ async fn subscribe_celestia(
                                 blob.data,
                                 current_cid,
                                 block_info,
-                                Arc::clone(&connection),
                                 state.height,
+                                genesis_cid_text.clone()
                             )
                             .await;
                         }

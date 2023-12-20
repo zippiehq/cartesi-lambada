@@ -66,7 +66,7 @@ if [ ! -e /data/base-machines/lambada-base-machine ]; then
 fi
 
 if [ x$SEQUENCER_URL = x ]; then
-   SEQUENCER_URL=http://0.0.0.0:26658
+   SEQUENCER_URL=https://espresso.tspre.org
 fi
 
 mkdir -p /data/db
