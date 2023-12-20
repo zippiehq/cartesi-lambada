@@ -36,3 +36,4 @@ base64 = "0.21.5"
 jsonrpsee = {version = "0.18.2", features=["jsonrpsee-http-client"]}
 celestia-rpc = {git = "https://github.com/eigerco/lumina"}
 celestia-types = { git = "https://github.com/eigerco/lumina" }
+rand = "0.8"

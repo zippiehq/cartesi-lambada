@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 zippiehq/cartesi-lambada-base-image:1.0 AS lambada-image
+FROM --platform=linux/amd64 zippiehq/cartesi-lambada-base-image:1.1 AS lambada-image
 
 FROM debian:bookworm-20230725-slim AS build
 RUN apt-get update && DEBIAN_FRONTEND="noninteractive" apt-get install -y curl build-essential libssl-dev pkg-config
@@ -12,7 +12,7 @@ COPY ./lambada /build/lambada
 RUN apt-get update \
     && apt-get install -y protobuf-compiler
 ARG RELEASE=--release
-RUN --mount=type=cache,target=/usr/local/cargo/registry PATH=~/.cargo/bin:$PATH cargo build $RELEASE
+RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
 
 FROM debian:bookworm-20230725-slim AS image
 

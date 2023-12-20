@@ -255,9 +255,9 @@ async fn handle_tx(
             Cid::try_from(current_cid.clone()).unwrap().to_string()
         );
     } else {
-        //TODO
-        panic!("execute failed");
+        tracing::info!("EXECUTE FAILED: reusing current_cid, as transaction failed");
     }
+    // XXX Is this right? Shouldn't this be after processing all tx'es?
     let connection =
         sqlite::Connection::open_thread_safe(format!("{}/{}", opt.db_path, genesis_cid_text))
             .unwrap();

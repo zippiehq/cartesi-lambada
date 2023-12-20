@@ -4980,6 +4980,7 @@ dependencies = [
  "hyper-tls",
  "ipfs-api-backend-hyper",
  "jf-primitives",
+ "rand 0.8.5",
  "jsonrpsee 0.18.2",
  "sequencer",
  "serde",

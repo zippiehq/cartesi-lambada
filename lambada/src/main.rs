@@ -17,8 +17,10 @@ use lambada::Options;
 use sequencer::L1BlockInfo;
 use serde::{Deserialize, Serialize};
 use sqlite::State;
+use std::io::Cursor;
 use std::sync::Arc;
 use std::{convert::Infallible};
+use rand::Rng;
 
 async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
     let executor_options = ExecutorOptions {
@@ -245,6 +247,57 @@ async fn request_handler(
                 .status(StatusCode::BAD_REQUEST)
                 .body(Body::from(json_error))
                 .unwrap();
+        }
+        // XXX temporary for RWA demo
+        (hyper::Method::GET, ["new", app_cid]) => {
+            let random_number: u64 = rand::thread_rng().gen();
+
+            let ipfs_client = IpfsClient::from_str(options.ipfs_url.clone().as_str()).unwrap();
+            ipfs_client.files_mkdir(&format!("/new-{}", random_number), false).await.unwrap();
+            ipfs_client.files_cp(&format!("/ipfs/{}", app_cid), &format!("/new-{}/app", random_number)).await.unwrap();
+            let chain_info = ipfs_client.files_read(&format!("/new-{}/app/chain-info.json", random_number)).map_ok(|chunk| chunk.to_vec())
+            .try_concat()
+            .await
+            .unwrap();
+            
+            let https = HttpsConnector::new();
+            let client = Client::builder().build::<_, hyper::Body>(https);
+
+            let uri: String = format!("{}/status/latest_block_height", options.sequencer_url.clone())
+                .parse()
+                .unwrap();
+
+            let block_req = Request::builder().method("GET").uri(uri).body(Body::empty()).unwrap();
+            let block_response = client.request(block_req).await.unwrap();
+            let body_bytes = hyper::body::to_bytes(block_response).await.unwrap();
+            let height = String::from_utf8_lossy(&body_bytes).trim().parse::<u64>().unwrap();
+
+            let mut chain_info = serde_json::from_slice::<serde_json::Value>(&chain_info)
+            .expect("error reading chain-info.json file");
+
+            chain_info
+            .get_mut("sequencer")   
+            .unwrap()["vm-id"] = serde_json::Value::from(random_number.to_string());
+
+            chain_info
+            .get_mut("sequencer")   
+            .unwrap()["height"] = serde_json::Value::from(height.to_string());
+
+            let chain_info = serde_json::to_vec(&chain_info).unwrap();
+            ipfs_client.files_rm(&format!("/new-{}/app/chain-info.json", random_number), false).await.unwrap();
+            ipfs_client
+            .files_write(&format!("/new-{}/app/chain-info.json", random_number), true, true, Cursor::new(chain_info))
+            .await
+            .unwrap();
+
+            let app_cid = ipfs_client.files_stat(&format!("/new-{}", random_number)).await.unwrap().hash;
+            let json_response = serde_json::json!({
+                "cid": app_cid
+            });
+            
+            let json_response = serde_json::to_string(&json_response).unwrap();
+            let response = Response::new(Body::from(json_response));
+            return response;
         }
         (hyper::Method::GET, ["block", appchain, height_number]) => {
             if !subscriptions
