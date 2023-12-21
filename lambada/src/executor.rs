@@ -33,6 +33,8 @@ pub struct ExecutorOptions {
 }
 
 pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appchain: Cid) {
+    tracing::info!("starting subscribe() of {:?}", appchain.to_string());
+   
     let mut current_cid = appchain.clone();
     let genesis_cid_text = current_cid.to_string();
     let mut current_height: u64 = u64::MAX;
@@ -69,6 +71,8 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
         );
         current_cid = cid;
         current_height = height;
+    } else {
+        tracing::info!("new chain, not persisted: {:?}", genesis_cid_text);
     }
 
     let ipfs_client = IpfsClient::from_str(&opt.ipfs_url).unwrap();
@@ -79,6 +83,7 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
         tracing::debug!("not chain info found, leaving");
         return;
     }
+    tracing::info!("starting subscribe loop of {:?}", appchain.to_string());
     loop {
         // Set up subscription: read what sequencer and (if we don't know it already)
         let chain_info = ipfs_client
