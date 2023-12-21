@@ -20,6 +20,7 @@ use sqlite::State;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::convert::Infallible;
+use std::thread;
 use rand::Rng;
 
 async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
@@ -33,12 +34,16 @@ async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
     let cartesi_machine_url = options.cartesi_machine_url.to_string().clone();
 
     tracing::info!("Subscribing to appchain {:?}", cid.to_string());
-    task::spawn(async move {
-        let _ = task::block_on(subscribe(
+    thread::spawn(move || {
+        tracing::info!("in thread");
+        let _ = task::block_on(async {
+          subscribe(
             executor_options,
             cartesi_machine_url.clone(),
             Cid::try_from(cid).unwrap(),
-        ));
+         ).await;
+         });
+        tracing::info!("out of thread");
     });
 }
 
