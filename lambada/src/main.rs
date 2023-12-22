@@ -134,7 +134,7 @@ async fn request_handler(
                     .unwrap();
             }
         }
-        (hyper::Method::POST, ["compute_with_callback", cid]) => {
+        (hyper::Method::POST, ["compute_callback", cid]) => {
             let body = hyper::body::to_bytes(reqest.into_body())
                 .await
                 .unwrap()
