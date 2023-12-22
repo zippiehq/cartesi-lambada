@@ -35,3 +35,4 @@ ipfs-api-backend-hyper = { version = "0.6.0", features = ["with-send-sync"], def
 celestia-rpc = {git = "https://github.com/eigerco/lumina"}
 celestia-types = { git = "https://github.com/eigerco/lumina" }
 rand = "0.8"
+sha256 = "1.4.0"
