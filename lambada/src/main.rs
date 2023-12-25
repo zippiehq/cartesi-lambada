@@ -12,8 +12,8 @@ use clap::Parser;
 use ethers::prelude::*;
 use futures::TryStreamExt;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::StatusCode;
 use hyper::{header, Body, Client, HeaderMap, Method, Request, Response, Server};
+use hyper::{StatusCode, Uri};
 use hyper_tls::HttpsConnector;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use lambada::executor::{subscribe, ExecutorOptions};
@@ -22,11 +22,11 @@ use rand::Rng;
 use sequencer::L1BlockInfo;
 use serde::{Deserialize, Serialize};
 use sqlite::State;
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::thread;
-
 async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
     let executor_options = ExecutorOptions {
         espresso_testnet_sequencer_url: options.espresso_testnet_sequencer_url.clone(),
@@ -41,12 +41,13 @@ async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
     thread::spawn(move || {
         tracing::info!("in thread");
         let _ = task::block_on(async {
-          subscribe(
-            executor_options,
-            cartesi_machine_url.clone(),
-            Cid::try_from(cid).unwrap(),
-         ).await;
-         });
+            subscribe(
+                executor_options,
+                cartesi_machine_url.clone(),
+                Cid::try_from(cid).unwrap(),
+            )
+            .await;
+        });
         tracing::info!("out of thread");
     });
 }
@@ -105,69 +106,35 @@ async fn main() {
 }
 
 async fn request_handler(
-    reqest: Request<Body>,
+    request: Request<Body>,
     segments: &[&str],
     options: Arc<lambada::Options>,
     subscriptions: Arc<Mutex<Vec<Cid>>>,
 ) -> Response<Body> {
-    match (reqest.method().clone(), segments) {
+    let mut parsed_query: HashMap<String, String> = HashMap::new();
+    if let Some(query) = request.uri().query() {
+        parsed_query = query
+            .split('&')
+            .filter_map(|part| {
+                let mut split_iter = part.splitn(2, '=');
+                let key = split_iter.next()?.to_owned();
+                let value = split_iter.next().unwrap_or("").to_owned();
+                Some((key, value))
+            })
+            .collect();
+    }
+    match (request.method().clone(), segments) {
         (hyper::Method::POST, ["compute", cid]) => {
-            if reqest.headers().get("content-type")
+            if request.headers().get("content-type")
                 == Some(&hyper::header::HeaderValue::from_static(
                     "application/octet-stream",
                 ))
             {
-                let data = hyper::body::to_bytes(reqest.into_body())
+                let data = hyper::body::to_bytes(request.into_body())
                     .await
                     .unwrap()
                     .to_vec();
-                let cartesi_machine_url = options.cartesi_machine_url.clone();
-                let ipfs_url = options.ipfs_url.as_str();
-
-                let cartesi_machine_path = options.machine_dir.as_str();
-
-                let machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url.to_string())
-                    .await
-                    .unwrap();
-                let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
-                let state_cid = Cid::try_from(cid.to_string()).unwrap();
-                let block_info: &L1BlockInfo = &L1BlockInfo {
-                    number: 0,
-                    timestamp: U256([0; 4]),
-                    hash: H256([0; 32]),
-                };
-                let new_state_cid = execute(
-                    forked_machine_url,
-                    cartesi_machine_path,
-                    ipfs_url,
-                    data,
-                    state_cid,
-                    block_info,
-                )
-                .await;
-
-                match new_state_cid {
-                    Ok(cid) => {
-                        let json_response = serde_json::json!({
-                            "cid": Cid::try_from(cid).unwrap().to_string(),
-                        });
-                        let json_response = serde_json::to_string(&json_response).unwrap();
-
-                        let response = Response::new(Body::from(json_response));
-
-                        return response;
-                    }
-                    Err(e) => {
-                        let json_error = serde_json::json!({
-                            "error": e.to_string(),
-                        });
-                        let json_error = serde_json::to_string(&json_error).unwrap();
-                        return Response::builder()
-                            .status(StatusCode::BAD_REQUEST)
-                            .body(Body::from(json_error))
-                            .unwrap();
-                    }
-                }
+                compute(data, options.clone(), cid.to_string()).await
             } else {
                 let json_error = serde_json::json!({
                     "error": "request header should be application/octet-streams",
@@ -178,6 +145,86 @@ async fn request_handler(
                     .body(Body::from(json_error))
                     .unwrap();
             }
+        }
+        (hyper::Method::POST, ["compute_with_callback", cid]) => {
+            let body = hyper::body::to_bytes(request.into_body())
+                .await
+                .unwrap()
+                .to_vec();
+            let cid = Arc::new(cid.to_string());
+            thread::spawn(move || {
+                let _ = task::block_on(async {
+                    let response = compute(
+                        body.clone(),
+                        options.clone(),
+                        cid.to_string(),
+                    )
+                    .await;
+                    for query in parsed_query {
+                        if query.0.eq("callback") {
+                            let uri = match query.1.parse::<hyper::Uri>() {
+                                Ok(uri) => uri,
+                                Err(e) => {
+                                    tracing::info!("{}", e.to_string());
+                                    let json_error = serde_json::json!({
+                                        "error": e.to_string(),
+                                    });
+                                    let json_error = serde_json::to_string(&json_error).unwrap();
+                                    return Response::builder()
+                                        .status(StatusCode::BAD_REQUEST)
+                                        .body(Body::from(json_error))
+                                        .unwrap();
+                                }
+                            };
+                            let mut output = response.into_body();
+                            let data = serde_json::json!({
+                                "output": hyper::body::to_bytes(&mut output).await.unwrap().to_vec(),
+                                "hash": sha256::digest(body),
+                                "state_cid": cid,
+                            });
+                            let json_data = serde_json::to_string(&data).unwrap();
+                            let mut req = Request::new(Body::from(json_data.clone()));
+                            *req.uri_mut() = uri;
+                            let mut map = HeaderMap::new();
+                            map.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+                            *req.headers_mut() = map;
+                            *req.method_mut() = Method::POST;
+                            let https = HttpsConnector::new();
+                            let client = Client::builder().build::<_, hyper::Body>(https);
+
+                            match client.request(req).await {
+                                Ok(response) => {
+                                    tracing::info!("Compute with callback response: {:?}", response);
+                                    return response
+                                },
+                                Err(e) => {
+                                    tracing::info!("{}", e.to_string());
+                                    let json_error = serde_json::json!({
+                                        "error": e.to_string(),
+                                    });
+                                    let json_error = serde_json::to_string(&json_error).unwrap();
+                                    return Response::builder()
+                                        .status(StatusCode::BAD_REQUEST)
+                                        .body(Body::from(json_error))
+                                        .unwrap();
+                                }
+                            };
+                        }
+                    }
+                    tracing::info!("Callback parameter wan't set");
+                    let json_error = serde_json::json!({
+                        "error": "Callback parameter wan't set".to_string(),
+                    });
+                    let json_error = serde_json::to_string(&json_error).unwrap();
+                    return Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Body::from(json_error))
+                        .unwrap();
+                });
+            });
+            let json_request = r#"{"ok": "true"}"#;
+            let response = Response::new(Body::from(json_request));
+            response
         }
         (hyper::Method::GET, ["health"]) => {
             let json_request = r#"{"healthy": "true"}"#;
@@ -411,7 +458,7 @@ async fn request_handler(
                     .body(Body::from(json_error))
                     .unwrap();
             }
-            if reqest.headers().get("content-type")
+            if request.headers().get("content-type")
                 == Some(&hyper::header::HeaderValue::from_static(
                     "application/octet-stream",
                 ))
@@ -440,7 +487,7 @@ async fn request_handler(
                     .as_str()
                     .unwrap()
                     .to_string();
-                let data: Vec<u8> = hyper::body::to_bytes(reqest.into_body())
+                let data: Vec<u8> = hyper::body::to_bytes(request.into_body())
                     .await
                     .unwrap()
                     .to_vec();
@@ -582,6 +629,56 @@ async fn request_handler(
         _ => {
             let json_error = serde_json::json!({
                 "error": "Invalid request",
+            });
+            let json_error = serde_json::to_string(&json_error).unwrap();
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from(json_error))
+                .unwrap();
+        }
+    }
+}
+
+async fn compute(data: Vec<u8>, options: Arc<lambada::Options>, cid: String) -> Response<Body> {
+    let cartesi_machine_url = options.cartesi_machine_url.clone();
+    let ipfs_url = options.ipfs_url.as_str();
+
+    let cartesi_machine_path = options.machine_dir.as_str();
+
+    let machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url.to_string())
+        .await
+        .unwrap();
+    let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
+    let state_cid = Cid::try_from(cid).unwrap();
+    let block_info: &L1BlockInfo = &L1BlockInfo {
+        number: 0,
+        timestamp: U256([0; 4]),
+        hash: H256([0; 32]),
+    };
+    let new_state_cid = execute(
+        forked_machine_url,
+        cartesi_machine_path,
+        ipfs_url,
+        data,
+        state_cid,
+        block_info,
+    )
+    .await;
+
+    match new_state_cid {
+        Ok(cid) => {
+            let json_response = serde_json::json!({
+                "cid": Cid::try_from(cid).unwrap().to_string(),
+            });
+            let json_response = serde_json::to_string(&json_response).unwrap();
+
+            let response = Response::new(Body::from(json_response));
+
+            return response;
+        }
+        Err(e) => {
+            let json_error = serde_json::json!({
+                "error": e.to_string(),
             });
             let json_error = serde_json::to_string(&json_error).unwrap();
             return Response::builder()
