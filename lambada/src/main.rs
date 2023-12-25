@@ -12,8 +12,8 @@ use clap::Parser;
 use ethers::prelude::*;
 use futures::TryStreamExt;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::StatusCode;
 use hyper::{header, Body, Client, HeaderMap, Method, Request, Response, Server};
+use hyper::{StatusCode, Uri};
 use hyper_tls::HttpsConnector;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use lambada::executor::{subscribe, ExecutorOptions};
@@ -22,11 +22,11 @@ use rand::Rng;
 use sequencer::L1BlockInfo;
 use serde::{Deserialize, Serialize};
 use sqlite::State;
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::thread;
-
 async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
     let executor_options = ExecutorOptions {
         espresso_testnet_sequencer_url: options.espresso_testnet_sequencer_url.clone(),
@@ -106,19 +106,31 @@ async fn main() {
 }
 
 async fn request_handler(
-    reqest: Request<Body>,
+    request: Request<Body>,
     segments: &[&str],
     options: Arc<lambada::Options>,
     subscriptions: Arc<Mutex<Vec<Cid>>>,
 ) -> Response<Body> {
-    match (reqest.method().clone(), segments) {
+    let mut parsed_query: HashMap<String, String> = HashMap::new();
+    if let Some(query) = request.uri().query() {
+        parsed_query = query
+            .split('&')
+            .filter_map(|part| {
+                let mut split_iter = part.splitn(2, '=');
+                let key = split_iter.next()?.to_owned();
+                let value = split_iter.next().unwrap_or("").to_owned();
+                Some((key, value))
+            })
+            .collect();
+    }
+    match (request.method().clone(), segments) {
         (hyper::Method::POST, ["compute", cid]) => {
-            if reqest.headers().get("content-type")
+            if request.headers().get("content-type")
                 == Some(&hyper::header::HeaderValue::from_static(
                     "application/octet-stream",
                 ))
             {
-                let data = hyper::body::to_bytes(reqest.into_body())
+                let data = hyper::body::to_bytes(request.into_body())
                     .await
                     .unwrap()
                     .to_vec();
@@ -134,67 +146,80 @@ async fn request_handler(
                     .unwrap();
             }
         }
-        (hyper::Method::POST, ["compute_callback", cid]) => {
-            let body = hyper::body::to_bytes(reqest.into_body())
+        (hyper::Method::POST, ["compute_with_callback", cid]) => {
+            let body = hyper::body::to_bytes(request.into_body())
                 .await
                 .unwrap()
                 .to_vec();
             let cid = Arc::new(cid.to_string());
-            let compute_with_callback_inputs =
-                serde_json::from_slice::<ComputeWithCallbackRequest>(&body).unwrap();
             thread::spawn(move || {
                 let _ = task::block_on(async {
                     let response = compute(
-                        compute_with_callback_inputs.input.clone(),
+                        body.clone(),
                         options.clone(),
                         cid.to_string(),
                     )
                     .await;
-
-                    let uri = match compute_with_callback_inputs.callback.parse::<hyper::Uri>() {
-                        Ok(uri) => uri,
-                        Err(e) => {
-                            tracing::info!("{}", e.to_string());
-                            let json_error = serde_json::json!({
-                                "error": e.to_string(),
+                    for query in parsed_query {
+                        if query.0.eq("callback") {
+                            let uri = match query.1.parse::<hyper::Uri>() {
+                                Ok(uri) => uri,
+                                Err(e) => {
+                                    tracing::info!("{}", e.to_string());
+                                    let json_error = serde_json::json!({
+                                        "error": e.to_string(),
+                                    });
+                                    let json_error = serde_json::to_string(&json_error).unwrap();
+                                    return Response::builder()
+                                        .status(StatusCode::BAD_REQUEST)
+                                        .body(Body::from(json_error))
+                                        .unwrap();
+                                }
+                            };
+                            let mut output = response.into_body();
+                            let data = serde_json::json!({
+                                "output": hyper::body::to_bytes(&mut output).await.unwrap().to_vec(),
+                                "hash": sha256::digest(body),
+                                "state_cid": cid,
                             });
-                            let json_error = serde_json::to_string(&json_error).unwrap();
-                            return Response::builder()
-                                .status(StatusCode::BAD_REQUEST)
-                                .body(Body::from(json_error))
-                                .unwrap();
+                            let json_data = serde_json::to_string(&data).unwrap();
+                            let mut req = Request::new(Body::from(json_data.clone()));
+                            *req.uri_mut() = uri;
+                            let mut map = HeaderMap::new();
+                            map.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+                            *req.headers_mut() = map;
+                            *req.method_mut() = Method::POST;
+                            let https = HttpsConnector::new();
+                            let client = Client::builder().build::<_, hyper::Body>(https);
+
+                            match client.request(req).await {
+                                Ok(response) => {
+                                    tracing::info!("Compute with callback response: {:?}", response);
+                                    return response
+                                },
+                                Err(e) => {
+                                    tracing::info!("{}", e.to_string());
+                                    let json_error = serde_json::json!({
+                                        "error": e.to_string(),
+                                    });
+                                    let json_error = serde_json::to_string(&json_error).unwrap();
+                                    return Response::builder()
+                                        .status(StatusCode::BAD_REQUEST)
+                                        .body(Body::from(json_error))
+                                        .unwrap();
+                                }
+                            };
                         }
-                    };
-                    let mut output = response.into_body();
-                    let data = serde_json::json!({
-                        "output": hyper::body::to_bytes(&mut output).await.unwrap().to_vec(),
-                        "hash": sha256::digest(compute_with_callback_inputs.input),
-                        "state_cid": cid,
+                    }
+                    tracing::info!("Callback parameter wan't set");
+                    let json_error = serde_json::json!({
+                        "error": "Callback parameter wan't set".to_string(),
                     });
-                    let json_data = serde_json::to_string(&data).unwrap();
-                    let mut req = Request::new(Body::from(json_data.clone()));
-                    *req.uri_mut() = uri;
-                    let mut map = HeaderMap::new();
-                    map.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
-                    *req.headers_mut() = map;
-                    *req.method_mut() = Method::POST;
-                    let https = HttpsConnector::new();
-                    let client = Client::builder().build::<_, hyper::Body>(https);
-
-                    match client.request(req).await {
-                        Ok(response) => return response,
-                        Err(e) => {
-                            tracing::info!("{}", e.to_string());
-                            let json_error = serde_json::json!({
-                                "error": e.to_string(),
-                            });
-                            let json_error = serde_json::to_string(&json_error).unwrap();
-                            return Response::builder()
-                                .status(StatusCode::BAD_REQUEST)
-                                .body(Body::from(json_error))
-                                .unwrap();
-                        }
-                    };
+                    let json_error = serde_json::to_string(&json_error).unwrap();
+                    return Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Body::from(json_error))
+                        .unwrap();
                 });
             });
             let json_request = r#"{"ok": "true"}"#;
@@ -433,7 +458,7 @@ async fn request_handler(
                     .body(Body::from(json_error))
                     .unwrap();
             }
-            if reqest.headers().get("content-type")
+            if request.headers().get("content-type")
                 == Some(&hyper::header::HeaderValue::from_static(
                     "application/octet-stream",
                 ))
@@ -462,7 +487,7 @@ async fn request_handler(
                     .as_str()
                     .unwrap()
                     .to_string();
-                let data: Vec<u8> = hyper::body::to_bytes(reqest.into_body())
+                let data: Vec<u8> = hyper::body::to_bytes(request.into_body())
                     .await
                     .unwrap()
                     .to_vec();
@@ -668,10 +693,4 @@ async fn compute(data: Vec<u8>, options: Arc<lambada::Options>, cid: String) -> 
 struct Data {
     vm: u64,
     payload: Vec<u8>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct ComputeWithCallbackRequest {
-    callback: String,
-    input: Vec<u8>,
 }
