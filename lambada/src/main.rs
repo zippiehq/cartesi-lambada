@@ -195,7 +195,7 @@ async fn request_handler(
                                         }
                                     };
                                     let data = serde_json::json!({
-                                        "output": resulted_cid.to_bytes(),
+                                        "output": resulted_cid.to_string(),
                                         "hash": sha256::digest(body),
                                         "state_cid": cid,
                                     });
