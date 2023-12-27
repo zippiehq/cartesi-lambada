@@ -1,6 +1,7 @@
 use futures::TryStreamExt;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 
+use async_std::task;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use cartesi_machine_json_rpc::client::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
@@ -8,9 +9,10 @@ use cid::Cid;
 use hyper::Request;
 use sequencer::L1BlockInfo;
 use serde_json::Value;
+use std::fs::File;
 use std::io::Cursor;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::{thread, time::SystemTime};
 // How we communicate between host (this) and guest (the cartesi machine) is through read-writing the second flash drive
 // which is placed in memory at MACHINE_IO_ADDRESSS. Special care is needed on machine side to flush/ignore OS caches until PMEM/DAX comes around.
 //
@@ -114,6 +116,18 @@ pub async fn execute(
     ))
     .is_dir()
     {
+        while std::path::Path::new(&format!(
+            "/data/snapshot/base_{}.lock",
+            Cid::try_from(app_cid.clone()).unwrap().to_string()
+        ))
+        .exists()
+        {
+            tracing::info!(
+                "waiting for base_{}.lock",
+                Cid::try_from(app_cid.clone()).unwrap().to_string()
+            );
+            thread::sleep(std::time::Duration::from_millis(500));
+        }
         // There is a snapshot of this base machine with this app initialized and waiting for a transaction (LOAD_TX)
         tracing::info!(
             "loading machine from /data/snapshot/base_{}",
@@ -141,11 +155,15 @@ pub async fn execute(
                 .unwrap()
                 .as_millis()
         );
-        
+
         machine_loaded_state = 2;
         tracing::info!("read iflag y {:?}", machine.read_iflags_y().await.unwrap());
-    } else if std::path::Path::new(&format!("/data/snapshot/base",)).exists() {
+    } else if std::path::Path::new(&format!("/data/snapshot/base")).exists() {
         // There is a snapshot of this base machine initialized and waiting to be populated with an app that'll initialize (LOAD_APP)
+        while std::path::Path::new("/data/snapshot/base.lock").exists() {
+            tracing::info!("waiting for base.lock");
+            thread::sleep(std::time::Duration::from_millis(500));
+        }
         let before_load_machine = SystemTime::now();
         machine
             .load_machine(
@@ -180,7 +198,6 @@ pub async fn execute(
             .await
             .unwrap();
     }
-    let mut snapshotting_threads: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
     loop {
         let mut interpreter_break_reason = Value::Null;
@@ -264,9 +281,6 @@ pub async fn execute(
             // 2. Shuts down the machine, ensuring all ongoing processes are terminated.
             // 3. Returns an error of type `std::io::Error` with the kind `std::io::ErrorKind::Other`, indicating a general error, and a message "exception" to signify that an exception occurred.
             EXCEPTION => {
-                for thread in snapshotting_threads {
-                    thread.await.unwrap();
-                }
                 tracing::info!("HTIF_YIELD_REASON_TX_EXCEPTION");
                 machine.destroy().await.unwrap();
                 machine.shutdown().await.unwrap();
@@ -288,34 +302,43 @@ pub async fn execute(
             LOAD_TX => {
                 tracing::info!("LOAD_TX");
                 if machine_loaded_state == 0 || machine_loaded_state == 1 {
+                    File::create(format!(
+                        "/data/snapshot/base_{}.lock",
+                        app_cid.clone().to_string()
+                    ))
+                    .unwrap();
                     let arc_app_cid = Arc::new(app_cid.clone());
-                    let forked_machine_url =
-                            format!("http://{}", machine.fork().await.unwrap());
-                    let snapshotting_thread = tokio::task::spawn(async move {
-                        
-                        let forked_machine = JsonRpcCartesiMachineClient::new(forked_machine_url)
-                            .await
-                            .unwrap();
-                        let app_cid: cid::CidGeneric<64> =
-                            Cid::try_from(arc_app_cid.to_string()).unwrap();
-                        tracing::info!(
-                            "snapshot stage load tx to dir: {} and read iflag : {}",
-                            format!("/data/snapshot/base_{}", app_cid.clone().to_string()),
-                            forked_machine.read_iflags_y().await.unwrap()
-                        );
+                    let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
+                    thread::spawn(move || {
+                        let _ = task::block_on(async move {
+                            let forked_machine =
+                                JsonRpcCartesiMachineClient::new(forked_machine_url)
+                                    .await
+                                    .unwrap();
+                            let app_cid: cid::CidGeneric<64> =
+                                Cid::try_from(arc_app_cid.to_string()).unwrap();
+                            tracing::info!(
+                                "snapshot stage load tx to dir: {} and read iflag : {}",
+                                format!("/data/snapshot/base_{}", app_cid.clone().to_string()),
+                                forked_machine.read_iflags_y().await.unwrap()
+                            );
 
-                        forked_machine
-                            .store(&format!(
-                                "/data/snapshot/base_{}",
-                                app_cid.clone().to_string(),
+                            forked_machine
+                                .store(&format!(
+                                    "/data/snapshot/base_{}",
+                                    app_cid.clone().to_string(),
+                                ))
+                                .await
+                                .unwrap();
+                            forked_machine.destroy().await.unwrap();
+                            forked_machine.shutdown().await.unwrap();
+                            std::fs::remove_file(format!(
+                                "/data/snapshot/base_{}.lock",
+                                app_cid.clone().to_string()
                             ))
-                            .await
                             .unwrap();
-                        tracing::info!("finished snapshotting");
-                        forked_machine.destroy().await.unwrap();
-                        forked_machine.shutdown().await.unwrap();
+                        });
                     });
-                    snapshotting_threads.push(snapshotting_thread);
                 }
                 let cid_length = state_cid.clone().to_bytes().len() as u64;
 
@@ -417,10 +440,6 @@ pub async fn execute(
                     .await
                     .unwrap();
 
-                for thread in snapshotting_threads {
-                    thread.await.unwrap();
-                }
-
                 match status {
                     0 => {
                         tracing::info!("HTIF_YIELD_REASON_RX_ACCEPTED");
@@ -487,21 +506,23 @@ pub async fn execute(
 
                 if machine_loaded_state == 0 {
                     let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
-
-                    let snapshotting_thread = tokio::task::spawn(async move {
-                    let forked_machine = JsonRpcCartesiMachineClient::new(forked_machine_url)
-                        .await
-                        .unwrap();
-                        tracing::info!(
+                    File::create("/data/snapshot/base.lock").unwrap();
+                    thread::spawn(move || {
+                        let _ = task::block_on(async {
+                            let forked_machine =
+                                JsonRpcCartesiMachineClient::new(forked_machine_url)
+                                    .await
+                                    .unwrap();
+                            tracing::info!(
                         "snapshot stage load app to dir: /data/snapshot/base and read iflag : {}",
                         forked_machine.read_iflags_y().await.unwrap()
                     );
-                        forked_machine.store("/data/snapshot/base").await.unwrap();
-                        tracing::info!("finished snapshotting");
-                        forked_machine.destroy().await.unwrap();
-                        forked_machine.shutdown().await.unwrap();
+                            forked_machine.store("/data/snapshot/base").await.unwrap();
+                            forked_machine.destroy().await.unwrap();
+                            forked_machine.shutdown().await.unwrap();
+                            std::fs::remove_file("/data/snapshot/base.lock").unwrap();
+                        });
                     });
-                    snapshotting_threads.push(snapshotting_thread);
                 }
                 let app_cid: cid::CidGeneric<64> = Cid::try_from(app_cid.clone()).unwrap();
 
