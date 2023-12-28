@@ -1,6 +1,7 @@
 use futures::TryStreamExt;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 
+use async_std::task;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use cartesi_machine_json_rpc::client::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
@@ -8,19 +9,19 @@ use cid::Cid;
 use hyper::Request;
 use sequencer::L1BlockInfo;
 use serde_json::Value;
-use sqlite::State;
+use std::fs::File;
 use std::io::Cursor;
-use std::time::{Duration, SystemTime};
-
+use std::sync::Arc;
+use std::{thread, time::SystemTime};
 // How we communicate between host (this) and guest (the cartesi machine) is through read-writing the second flash drive
 // which is placed in memory at MACHINE_IO_ADDRESSS. Special care is needed on machine side to flush/ignore OS caches until PMEM/DAX comes around.
 //
 // The guest writes certain operations along with serialized parameters into memory, does an automatic yield, and the host handles the operation
 // and resumes its execution after clearing yield flag.
 //
-// The model we are assuming here: 
+// The model we are assuming here:
 // - a base machine image, that'll boot up
-// - signal LOAD_APP (give me an app CID), 
+// - signal LOAD_APP (give me an app CID),
 // - and the app will signal LOAD_TX (give me a payload and state CID + app CID (for double checking it's running the right image))
 // - and result in FINISH (accept/reject) with a new state CID or EXCEPTION
 // - halting or out of cycles is a failed tx
@@ -58,10 +59,7 @@ pub async fn execute(
     state_cid: Cid,
     block_info: &L1BlockInfo,
 ) -> Result<Cid, std::io::Error> {
-    tracing::info!(
-        "state cid {:?}",
-        state_cid.to_string()
-    );
+    tracing::info!("state cid {:?}", state_cid.to_string());
 
     // Resolve what the app CID is in this current state
     let req = Request::builder()
@@ -106,7 +104,7 @@ pub async fn execute(
     tracing::info!("execute");
 
     // connect to a Cartesi Machine - we expect this to be an forked, empty machine and we control when it's shut down
-    let mut machine = JsonRpcCartesiMachineClient::new(machine_url).await.unwrap();
+    let machine = JsonRpcCartesiMachineClient::new(machine_url).await.unwrap();
 
     // The current state of the machine (0 = base image loaded, base image initialized (LOAD_APP), 1 = app initialized (LOAD_TX), 2 = processing a tx (should end in FINISH/EXCEPTION))
     let mut machine_loaded_state = 0;
@@ -118,6 +116,18 @@ pub async fn execute(
     ))
     .is_dir()
     {
+        while std::path::Path::new(&format!(
+            "/data/snapshot/base_{}.lock",
+            Cid::try_from(app_cid.clone()).unwrap().to_string()
+        ))
+        .exists()
+        {
+            tracing::info!(
+                "waiting for base_{}.lock",
+                Cid::try_from(app_cid.clone()).unwrap().to_string()
+            );
+            thread::sleep(std::time::Duration::from_millis(500));
+        }
         // There is a snapshot of this base machine with this app initialized and waiting for a transaction (LOAD_TX)
         tracing::info!(
             "loading machine from /data/snapshot/base_{}",
@@ -145,11 +155,15 @@ pub async fn execute(
                 .unwrap()
                 .as_millis()
         );
-        
+
         machine_loaded_state = 2;
         tracing::info!("read iflag y {:?}", machine.read_iflags_y().await.unwrap());
-    } else if std::path::Path::new(&format!("/data/snapshot/base",)).exists() {
+    } else if std::path::Path::new(&format!("/data/snapshot/base")).exists() {
         // There is a snapshot of this base machine initialized and waiting to be populated with an app that'll initialize (LOAD_APP)
+        while std::path::Path::new("/data/snapshot/base.lock").exists() {
+            tracing::info!("waiting for base.lock");
+            thread::sleep(std::time::Duration::from_millis(500));
+        }
         let before_load_machine = SystemTime::now();
         machine
             .load_machine(
@@ -288,21 +302,43 @@ pub async fn execute(
             LOAD_TX => {
                 tracing::info!("LOAD_TX");
                 if machine_loaded_state == 0 || machine_loaded_state == 1 {
-                    let app_cid: cid::CidGeneric<64> = Cid::try_from(app_cid.clone()).unwrap();
-                    tracing::info!(
-                        "snapshot stage load tx to dir: {} and read iflag : {}",
-                        format!("/data/snapshot/base_{}", app_cid.clone().to_string()),
-                        machine.read_iflags_y().await.unwrap()
-                    );
+                    File::create(format!(
+                        "/data/snapshot/base_{}.lock",
+                        app_cid.clone().to_string()
+                    ))
+                    .unwrap();
+                    let arc_app_cid = Arc::new(app_cid.clone());
+                    let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
+                    thread::spawn(move || {
+                        let _ = task::block_on(async move {
+                            let forked_machine =
+                                JsonRpcCartesiMachineClient::new(forked_machine_url)
+                                    .await
+                                    .unwrap();
+                            let app_cid: cid::CidGeneric<64> =
+                                Cid::try_from(arc_app_cid.to_string()).unwrap();
+                            tracing::info!(
+                                "snapshot stage load tx to dir: {} and read iflag : {}",
+                                format!("/data/snapshot/base_{}", app_cid.clone().to_string()),
+                                forked_machine.read_iflags_y().await.unwrap()
+                            );
 
-                    machine
-                        .store(&format!(
-                            "/data/snapshot/base_{}",
-                            app_cid.clone().to_string(),
-                        ))
-                        .await
-                        .unwrap();
-                    tracing::info!("done snapshotting");
+                            forked_machine
+                                .store(&format!(
+                                    "/data/snapshot/base_{}",
+                                    app_cid.clone().to_string(),
+                                ))
+                                .await
+                                .unwrap();
+                            forked_machine.destroy().await.unwrap();
+                            forked_machine.shutdown().await.unwrap();
+                            std::fs::remove_file(format!(
+                                "/data/snapshot/base_{}.lock",
+                                app_cid.clone().to_string()
+                            ))
+                            .unwrap();
+                        });
+                    });
                 }
                 let cid_length = state_cid.clone().to_bytes().len() as u64;
 
@@ -467,13 +503,26 @@ pub async fn execute(
             // If a snapshot doesn't exist for the base image being in LOAD_APP mode, it's done
             LOAD_APP => {
                 tracing::info!("LOAD_APP");
+
                 if machine_loaded_state == 0 {
-                    tracing::info!(
+                    let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
+                    File::create("/data/snapshot/base.lock").unwrap();
+                    thread::spawn(move || {
+                        let _ = task::block_on(async {
+                            let forked_machine =
+                                JsonRpcCartesiMachineClient::new(forked_machine_url)
+                                    .await
+                                    .unwrap();
+                            tracing::info!(
                         "snapshot stage load app to dir: /data/snapshot/base and read iflag : {}",
-                        machine.read_iflags_y().await.unwrap()
+                        forked_machine.read_iflags_y().await.unwrap()
                     );
-                    machine.store("/data/snapshot/base").await.unwrap();
-                    tracing::info!("done snapshotting");
+                            forked_machine.store("/data/snapshot/base").await.unwrap();
+                            forked_machine.destroy().await.unwrap();
+                            forked_machine.shutdown().await.unwrap();
+                            std::fs::remove_file("/data/snapshot/base.lock").unwrap();
+                        });
+                    });
                 }
                 let app_cid: cid::CidGeneric<64> = Cid::try_from(app_cid.clone()).unwrap();
 
@@ -499,7 +548,7 @@ pub async fn execute(
 
             // This is currently a null-op, but HINT is meant to tell the host / dehashing database/provider that there's an expectation
             // that certain hashes/CIDs are available for dehashing/resolving
-            // In memory this is a BE u64 value of length of payload 
+            // In memory this is a BE u64 value of length of payload
             HINT => {
                 tracing::info!("HINT");
 
