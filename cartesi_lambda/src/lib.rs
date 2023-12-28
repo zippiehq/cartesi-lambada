@@ -337,6 +337,7 @@ pub async fn execute(
                                 app_cid.clone().to_string()
                             ))
                             .unwrap();
+                            tracing::info!("done snapshotting app {}", app_cid.clone());
                         });
                     });
                 }
@@ -521,6 +522,7 @@ pub async fn execute(
                             forked_machine.destroy().await.unwrap();
                             forked_machine.shutdown().await.unwrap();
                             std::fs::remove_file("/data/snapshot/base.lock").unwrap();
+                            tracing::info!("done snapshotting base");
                         });
                     });
                 }
