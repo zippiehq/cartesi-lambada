@@ -34,47 +34,59 @@ pub struct ExecutorOptions {
 
 pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appchain: Cid) {
     tracing::info!("starting subscribe() of {:?}", appchain.to_string());
-   
+
     let mut current_cid = appchain.clone();
     let genesis_cid_text = current_cid.to_string();
     let mut current_height: u64 = u64::MAX;
     let espresso_testnet_sequencer_url = opt.espresso_testnet_sequencer_url.clone();
     let celestia_testnet_sequencer_url = opt.celestia_testnet_sequencer_url.clone();
-
-    // Make sure database is set up
-    let connection =
-        sqlite::Connection::open_thread_safe(format!("{}/{}", opt.db_path, genesis_cid_text))
-            .unwrap();
-    let query = "
-    CREATE TABLE IF NOT EXISTS blocks (state_cid BLOB(48) NOT NULL,
-    height INTEGER NOT NULL);
-";
-    connection.execute(query).unwrap();
-
     let machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url)
         .await
         .unwrap();
+    // Make sure database is set up
+    {
+        let connection =
+            sqlite::Connection::open_thread_safe(format!("{}/{}", opt.db_path, genesis_cid_text))
+                .unwrap();
+        let query = "
+    CREATE TABLE IF NOT EXISTS blocks (state_cid BLOB(48) NOT NULL,
+    height INTEGER NOT NULL);
+";
+        connection.execute(query).unwrap();
+        let mut statement = connection.prepare("SELECT COUNT(*) FROM blocks").unwrap();
+        let count_rows = statement.iter().filter(|row| row.is_ok()).count();
 
-    // Get the latest CID and height if one exists
-    let mut statement = connection
-        .prepare("SELECT * FROM blocks ORDER BY height DESC LIMIT 1")
-        .unwrap();
+        if count_rows == 1 {
 
-    if let Ok(State::Row) = statement.next() {
-        let height = statement.read::<i64, _>("height").unwrap() as u64;
-        let cid = Cid::try_from(statement.read::<Vec<u8>, _>("state_cid").unwrap()).unwrap();
-        tracing::info!(
-            "persisted state of chain {:?} is height {:?} = CID {:?}",
-            genesis_cid_text,
-            height,
-            cid.to_string()
-        );
-        current_cid = cid;
-        current_height = height;
-    } else {
-        tracing::info!("new chain, not persisted: {:?}", genesis_cid_text);
+            let mut statement = connection
+                .prepare("INSERT INTO blocks (state_cid, height) VALUES (?, ?)")
+                .unwrap();
+            statement
+                .bind((1, &current_cid.to_bytes() as &[u8]))
+                .unwrap();
+            statement.bind((2, 1 as i64)).unwrap();
+            statement.next().unwrap();
+        }
+        // Get the latest CID and height
+        let mut statement = connection
+            .prepare("SELECT * FROM blocks ORDER BY height DESC LIMIT 1")
+            .unwrap();
+
+        if let Ok(State::Row) = statement.next() {
+            let height = statement.read::<i64, _>("height").unwrap() as u64;
+            let cid = Cid::try_from(statement.read::<Vec<u8>, _>("state_cid").unwrap()).unwrap();
+            tracing::info!(
+                "persisted state of chain {:?} is height {:?} = CID {:?}",
+                genesis_cid_text,
+                height,
+                cid.to_string()
+            );
+            current_cid = cid;
+            current_height = height;
+        } else {
+            tracing::info!("new chain, not persisted: {:?}", genesis_cid_text);
+        }
     }
-
     let ipfs_client = IpfsClient::from_str(&opt.ipfs_url).unwrap();
     // Set what our current chain info is, so we can notice later on if it changes
     let current_chain_info_cid: Arc<Mutex<Option<Cid>>> =
@@ -392,7 +404,7 @@ async fn subscribe_celestia(
     chain_vm_id: u64,
     genesis_cid_text: String,
 ) {
-    let token = match std::env::var("CELESTIA_TESTNET_NODE_AUTH_TOKEN_READ"){
+    let token = match std::env::var("CELESTIA_TESTNET_NODE_AUTH_TOKEN_READ") {
         Ok(token) => token,
         Err(_) => return,
     };
