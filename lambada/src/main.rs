@@ -173,87 +173,53 @@ async fn request_handler(
                 .unwrap()
                 .to_vec();
             let cid = Arc::new(cid.to_string());
+
+            let mut callback_uri: std::result::Result<Uri, std::string::String> =
+                Err("Callback parameter wan't set".to_string());
+            for query in parsed_query {
+                if query.0.eq("callback") {
+                    match query.1.parse::<hyper::Uri>() {
+                        Ok(uri) => {
+                            callback_uri = Ok(uri);
+                        }
+                        Err(e) => {
+                            callback_uri = Err(e.to_string());
+                        }
+                    };
+                }
+            }
+            let callback_uri = match callback_uri {
+                Ok(uri) => Arc::new(uri),
+                Err(e) => {
+                    tracing::info!("{}", e.to_string());
+                    let json_error = serde_json::json!({
+                        "error": e.to_string(),
+                    });
+                    let json_error = serde_json::to_string(&json_error).unwrap();
+                    return Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Body::from(json_error))
+                        .unwrap();
+                }
+            };
+            if callback_uri.scheme().is_none() {
+                let json_error = serde_json::json!({
+                    "error": "callback address should be in an absolute form",
+                });
+                let json_error = serde_json::to_string(&json_error).unwrap();
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from(json_error))
+                    .unwrap();
+            }
             thread::spawn(move || {
                 let _ = task::block_on(async {
                     match compute(body.clone(), options.clone(), cid.to_string()).await {
                         Ok(resulted_cid) => {
-                            for query in parsed_query {
-                                if query.0.eq("callback") {
-                                    let uri = match query.1.parse::<hyper::Uri>() {
-                                        Ok(uri) => uri,
-                                        Err(e) => {
-                                            tracing::info!("{}", e.to_string());
-                                            let json_error = serde_json::json!({
-                                                "error": e.to_string(),
-                                            });
-                                            let json_error =
-                                                serde_json::to_string(&json_error).unwrap();
-                                            return Response::builder()
-                                                .status(StatusCode::BAD_REQUEST)
-                                                .body(Body::from(json_error))
-                                                .unwrap();
-                                        }
-                                    };
-                                    let data = serde_json::json!({
-                                        "output": resulted_cid.to_string(),
-                                        "hash": sha256::digest(body),
-                                        "state_cid": cid,
-                                    });
-                                    let json_data = serde_json::to_string(&data).unwrap();
-                                    let mut req = Request::new(Body::from(json_data.clone()));
-                                    *req.uri_mut() = uri;
-                                    let mut map = HeaderMap::new();
-                                    map.insert(
-                                        header::CONTENT_TYPE,
-                                        "application/json".parse().unwrap(),
-                                    );
-                                    *req.headers_mut() = map;
-                                    *req.method_mut() = Method::POST;
-                                    let https = HttpsConnector::new();
-                                    let client = Client::builder().build::<_, hyper::Body>(https);
-
-                                    match client.request(req).await {
-                                        Ok(response) => {
-                                            tracing::info!(
-                                                "Compute with callback response: {:?}",
-                                                response
-                                            );
-                                            return response;
-                                        }
-                                        Err(e) => {
-                                            tracing::info!("{}", e.to_string());
-                                            let json_error = serde_json::json!({
-                                                "error": e.to_string(),
-                                            });
-                                            let json_error =
-                                                serde_json::to_string(&json_error).unwrap();
-                                            return Response::builder()
-                                                .status(StatusCode::BAD_REQUEST)
-                                                .body(Body::from(json_error))
-                                                .unwrap();
-                                        }
-                                    };
-                                }
-                            }
-                            tracing::info!("Callback parameter wan't set");
-                            let json_error = serde_json::json!({
-                                "error": "Callback parameter wan't set".to_string(),
-                            });
-                            let json_error = serde_json::to_string(&json_error).unwrap();
-                            return Response::builder()
-                                .status(StatusCode::BAD_REQUEST)
-                                .body(Body::from(json_error))
-                                .unwrap();
+                            send_callback(body, CallbackData::ComputeOutput(resulted_cid.to_string()), cid.to_string(), callback_uri).await
                         }
                         Err(e) => {
-                            let json_error = serde_json::json!({
-                                "error": e.to_string(),
-                            });
-                            let json_error = serde_json::to_string(&json_error).unwrap();
-                            return Response::builder()
-                                .status(StatusCode::BAD_REQUEST)
-                                .body(Body::from(json_error))
-                                .unwrap();
+                            send_callback(body, CallbackData::Error(e.to_string()), cid.to_string(), callback_uri).await
                         }
                     }
                 });
@@ -706,8 +672,65 @@ async fn compute(
     .await
 }
 
+async fn send_callback(
+    body: Vec<u8>,
+    callback_data: CallbackData,
+    cid: String,
+    callback_uri: Arc<Uri>,
+) -> hyper::Response<Body> {
+    let mut data = serde_json::Value::Null;
+
+    match callback_data {
+        CallbackData::ComputeOutput(resulted_cid) => {
+            data = serde_json::json!({
+                "output": resulted_cid,
+                "hash": sha256::digest(body),
+                "state_cid": cid,
+            });
+        }
+        CallbackData::Error(error) => {
+            data = serde_json::json!({
+                "error": error.to_string(),
+                "hash": sha256::digest(body),
+                "state_cid": cid,
+            });
+        }
+    }
+
+    let json_data = serde_json::to_string(&data).unwrap();
+    let mut req = Request::new(Body::from(json_data.clone()));
+    *req.uri_mut() = callback_uri.as_ref().clone();
+    let mut map = HeaderMap::new();
+    map.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+    *req.headers_mut() = map;
+    *req.method_mut() = Method::POST;
+    let https = HttpsConnector::new();
+    let client = Client::builder().build::<_, hyper::Body>(https);
+
+    match client.request(req).await {
+        Ok(response) => {
+            return response;
+        }
+        Err(e) => {
+            tracing::info!("{}", e.to_string());
+            let json_error = serde_json::json!({
+                "error": e.to_string(),
+            });
+            let json_error = serde_json::to_string(&json_error).unwrap();
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from(json_error))
+                .unwrap();
+        }
+    };
+}
 #[derive(Serialize, Deserialize)]
 struct Data {
     vm: u64,
     payload: Vec<u8>,
+}
+
+enum CallbackData {
+    Error(String),
+    ComputeOutput(String),
 }
