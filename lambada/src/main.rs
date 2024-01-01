@@ -175,7 +175,7 @@ async fn request_handler(
             let cid = Arc::new(cid.to_string());
 
             let mut callback_uri: std::result::Result<Uri, std::string::String> =
-                Err("Callback parameter wan't set".to_string());
+                Err("Callback parameter wasn't set".to_string());
             for query in parsed_query {
                 if query.0.eq("callback") {
                     match query.1.parse::<hyper::Uri>() {
