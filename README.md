@@ -2,6 +2,18 @@
 
 <img src="https://web3.link/lambada.png" width=50% height=50%>
 
+# Why does Lambada matter?
+
+There is an emerging environment characterized by a modular choice becoming possible, combining existing blockchains like Ethereum, alt-VMs, high-capacity decentralized sequencers, atomic transaction inclusion, data availability layers, re-staking mechanisms like Eigenlayer, co-processors, and zero-knowledge proofs. 
+
+This environment will likely be fully in place by the end of Q1-start of Q2 2024 - and we think we will be ready to provide Cartesi’s core value in this environment. We already see the beginnings of this with the deployment of technologies like Celestia mainnet & RiscZero.
+
+The current offering of Cartesi Rollups to developers is more suited towards those who’d deploy on existing Ethereum L1 or L2’s, host their infrastructure, and who have a deeper technical understanding, than fitting towards the millions of appchains envisioned with sequencers and data availability layers.
+
+The Lambada stack is focused on enabling swift, iterative experimentation & deployment, and easier proof-of-concept development, aiming to efficiently deliver value to both end-users and developers in this dynamic and evolving technological landscape. 
+
+The stack is meant to be simple, understandable, and possible to reason about by most participants in the ecosystem, to guide development, advocacy, and product direction.
+
 # What makes Lambada different?
 
 The main question posed by Lambada is: Does a world computer have to be so different than how modern cloud computing works today? Why does it need to feel so alien to developers?
