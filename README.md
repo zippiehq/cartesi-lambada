@@ -62,7 +62,7 @@ The fact that computation is supposed to only be ‘after initialization of app�
 
 ## Appchains are sovereign
 
-s mentioned above, we believe that appchains should be sovereign. Their current state should fully describe how the inputs from the sequencers they’ve picked as the source of their inputs should be processed and understood. It should be possible to point a Lambada node at an appchain genesis state and synchronize to the latest state of the appchain. All logic related to their execution should be described by the state and as much being computed inside the VM as possible.
+As mentioned above, we believe that appchains should be sovereign. Their current state should fully describe how the inputs from the sequencers they’ve picked as the source of their inputs should be processed and understood. It should be possible to point a Lambada node at an appchain genesis state and synchronize to the latest state of the appchain. All logic related to their execution should be described by the state and as much being computed inside the VM as possible.
 
 As such, the state, as hosted in IPFS, contains a ‘chain info’ descriptor that specifies which sequencer to use - currently supported are Celestia and Espresso testnet, which VM id/namespace it has, and what sequencer block height it should listen to. When a transaction has finalized from the point of view of the sequencer network and is included in the sequencer blocks, this is when we consider that a state is final of an appchain as anyone can calculate the state based on the inputs, up to that point.
 
@@ -76,46 +76,40 @@ IPFS access can be fronted by one or more CDNs, also in a CAR-file verifiable ma
 
 As appchains are sovereign, bridging messages into other machines (EVM, other Cartesi machines) is seen as running a client for the appchain within the VM of that chain and reading state of the appchain. 
 
-In practice, this means that the VMs on these chains must be able to query the sequencer state and the security of that client is related to how that sequencer state makes it into the chain. For sake of rapid evolution we don’t force a particular format on this messaging from execution wrapper perspective. 
+In practice, this means that the VMs on these chains must be able to query the sequencer state and the security of that client is related to how that sequencer state makes it into the chain. For the sake of rapid evolution, we don’t force a particular format on this messaging from execution wrapper perspective. 
 
-We make a hard assumptions all chains can run limited general-purpose computation either through ZK technology like RiscZero or WASM or RISC-V and expressibility of EVM is not a concern. 
+We make a hard assumption all chains can run limited general-purpose computation either through ZK technology like RiscZero or WASM or RISC-V and the lack of expressibility of EVM is not a concern. 
 
-For appchains receiving information, it will depend on the information that the sequencer provides. For Espresso, it provides Ethereum L1 head information and latest finalized block (not subject to reorg), but no such thing exists for Celestia.
-
-
-
-A lambada node can 
-
+For appchains to receive information, it will depend on the information that the sequencer provides. For Espresso, it provides Ethereum L1 head information and latest finalized block (not subject to reorg), but no such thing exists for Celestia.
 
 Release build:
 
-docker build -t cartesi-lambada:1.0 .
+``docker build -t cartesi-lambada:1.0 .``
 
 Debug build:
 
-docker build -t cartesi-lambada:1.0 --build-arg RELEASE= --build-arg RELEASE_DIR=debug .
+``docker build -t cartesi-lambada:1.0 --build-arg RELEASE= --build-arg RELEASE_DIR=debug .``
 
 Start it up:
 
-docker run -p 127.0.0.1:3033:3033 -v $PWD/data:/data cartesi-lambada:1.0
+``docker run -p 127.0.0.1:3033:3033 -v $PWD/data:/data cartesi-lambada:1.0``
 
 other terminal:
 
-curl -X POST -d 'echo hello world' -H "Content-Type: application/octet-stream" -v http://127.0.0.1:3033/compute/bafybeibbvzkwq7alhs65npugunlyt37vruuyqor76szt23nnxiqsjfvjbq
+``curl -X POST -d 'echo hello world' -H "Content-Type: application/octet-stream" -v http://127.0.0.1:3033/compute/bafybeibbvzkwq7alhs65npugunlyt37vruuyqor76szt23nnxiqsjfvjbq``
 
-# Run chain:
+# Subscribe to chain and get information on state
 
-Sample <appchain> is bafybeibbvzkwq7alhs65npugunlyt37vruuyqor76szt23nnxiqsjfvjbq
+Sample \"<appchain\>" is bafybeibbvzkwq7alhs65npugunlyt37vruuyqor76szt23nnxiqsjfvjbq
 
 Subscribe to a chain:
+  
+``curl http://127.0.0.1:3033/subscribe/<appchain>``
 
-curl http://127.0.0.1:3033/subscribe/<appchain>
+another terminal
 
-other terminal
+``curl -X POST -d 'transaction data' -H "Content-type: application/octet-stream" http://127.0.0.1:3033/submit/<appchain>``
 
-curl -X POST -d 'transaction data' -H "Content-type: application/octet-stream" http://127.0.0.1:3033/submit/<appchain>
+``curl http://127.0.0.1:3033/block/<appchain>/<height>``
 
-
-curl http://127.0.0.1:3033/block/<appchain>/<height>
-
-curl http://127.0.0.1:3033/latest/<appchain>
+``curl http://127.0.0.1:3033/latest/<appchain>``
