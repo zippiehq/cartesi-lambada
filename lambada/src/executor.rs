@@ -28,6 +28,7 @@ pub struct ExecutorOptions {
     pub espresso_testnet_sequencer_url: String,
     pub celestia_testnet_sequencer_url: String,
     pub ipfs_url: String,
+    pub ipfs_write_url: String,
     pub db_path: String,
     pub base_cartesi_machine_path: String,
 }
@@ -245,6 +246,7 @@ async fn handle_tx(
         forked_machine_url,
         &opt.base_cartesi_machine_path,
         opt.ipfs_url.as_str(),
+        opt.ipfs_write_url.as_str(),
         data,
         current_cid.clone(),
         block_info,

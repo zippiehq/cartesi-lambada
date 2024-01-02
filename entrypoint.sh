@@ -37,6 +37,11 @@ if [ x$IPFS_URL = x ]; then
   IPFS_PATH=/data/ipfs ipfs add --cid-version=1 -r /sample
 fi
 
+if [ -z "$IPFS_WRITE_URL" ]; then
+  IPFS_WRITE_URL=$IPFS_URL
+fi
+export IPFS_WRITE_URL
+
 if [ x$CARTESI_MACHINE_URL = x ]; then
    echo "Running container-local cartesi machine"
    /usr/bin/jsonrpc-remote-cartesi-machine --server-address=127.0.0.1:50051 &
