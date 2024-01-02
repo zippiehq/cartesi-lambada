@@ -58,7 +58,7 @@ pub async fn execute(
     payload: Vec<u8>,
     state_cid: Cid,
     block_info: &L1BlockInfo,
-    max_cycles: Option<u64>
+    max_cycles_input: Option<u64>,
 ) -> Result<Cid, std::io::Error> {
     tracing::info!("state cid {:?}", state_cid.to_string());
 
@@ -199,23 +199,27 @@ pub async fn execute(
             .await
             .unwrap();
     }
-
-    let mut current_cycle = 0;
+    let mut max_cycles = u64::MAX;
+    if let Some(m_cycle) = max_cycles_input {
+        max_cycles = m_cycle;
+    }
+    let mut current_cycle = machine.read_csr("mcycle".to_string()).await.unwrap();
 
     loop {
-        current_cycle += 1;
-        if let Some(m_cycle) = max_cycles {
-            if m_cycle < current_cycle {
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, "reached cycles limit before completion of execution"));
-            }
+        if max_cycles < current_cycle {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "reached cycles limit before completion of execution",
+            ));
         }
         let mut interpreter_break_reason = Value::Null;
         // Are we yielded? If not, continue machine execution
         // TODO: limit cycles if in compute mode
         if !machine.read_iflags_y().await.unwrap() {
             interpreter_break_reason = machine.run(u64::MAX).await.unwrap();
+            current_cycle = machine.read_csr("mcycle".to_string()).await.unwrap();
         }
-
+        
         // XXX remove, for debugging
         let hex_encoded = hex::encode(
             machine
