@@ -203,21 +203,13 @@ pub async fn execute(
     if let Some(m_cycle) = max_cycles_input {
         max_cycles = m_cycle;
     }
-    let mut current_cycle = machine.read_csr("mcycle".to_string()).await.unwrap();
 
     loop {
-        if max_cycles < current_cycle {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "reached cycles limit before completion of execution",
-            ));
-        }
+
         let mut interpreter_break_reason = Value::Null;
         // Are we yielded? If not, continue machine execution
-        // TODO: limit cycles if in compute mode
         if !machine.read_iflags_y().await.unwrap() {
-            interpreter_break_reason = machine.run(u64::MAX).await.unwrap();
-            current_cycle = machine.read_csr("mcycle".to_string()).await.unwrap();
+            interpreter_break_reason = machine.run(max_cycles).await.unwrap();
         }
         
         // XXX remove, for debugging
@@ -597,6 +589,12 @@ pub async fn execute(
             machine.destroy().await.unwrap();
             machine.shutdown().await.unwrap();
             // XXX we should return here
+        }
+        if interpreter_break_reason == Value::String("reached_target_mcycle".to_string()) {
+            tracing::info!("reached cycles limit before completion of execution");
+            machine.destroy().await.unwrap();
+            machine.shutdown().await.unwrap();
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, "reached cycles limit before completion of execution"));
         }
         // After handling the operation, we clear the yield flag and loop back and continue execution of machine
         machine.reset_iflags_y().await.unwrap();
