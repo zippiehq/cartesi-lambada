@@ -82,6 +82,8 @@ We make a hard assumption all chains can run limited general-purpose computation
 
 For appchains to receive information, it will depend on the information that the sequencer provides. For Espresso, it provides Ethereum L1 head information and latest finalized block (not subject to reorg), but no such thing exists for Celestia.
 
+# Usage
+
 Release build:
 
 ``docker build -t cartesi-lambada:1.0 .``
