@@ -58,6 +58,7 @@ pub async fn execute(
     payload: Vec<u8>,
     state_cid: Cid,
     block_info: &L1BlockInfo,
+    max_cycles_input: Option<u64>,
 ) -> Result<Cid, std::io::Error> {
     tracing::info!("state cid {:?}", state_cid.to_string());
 
@@ -198,15 +199,19 @@ pub async fn execute(
             .await
             .unwrap();
     }
+    let mut max_cycles = u64::MAX;
+    if let Some(m_cycle) = max_cycles_input {
+        max_cycles = m_cycle;
+    }
 
     loop {
+
         let mut interpreter_break_reason = Value::Null;
         // Are we yielded? If not, continue machine execution
-        // TODO: limit cycles if in compute mode
         if !machine.read_iflags_y().await.unwrap() {
-            interpreter_break_reason = machine.run(u64::MAX).await.unwrap();
+            interpreter_break_reason = machine.run(max_cycles).await.unwrap();
         }
-
+        
         // XXX remove, for debugging
         let hex_encoded = hex::encode(
             machine
@@ -584,6 +589,12 @@ pub async fn execute(
             machine.destroy().await.unwrap();
             machine.shutdown().await.unwrap();
             // XXX we should return here
+        }
+        if interpreter_break_reason == Value::String("reached_target_mcycle".to_string()) {
+            tracing::info!("reached cycles limit before completion of execution");
+            machine.destroy().await.unwrap();
+            machine.shutdown().await.unwrap();
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, "reached cycles limit before completion of execution"));
         }
         // After handling the operation, we clear the yield flag and loop back and continue execution of machine
         machine.reset_iflags_y().await.unwrap();

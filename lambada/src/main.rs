@@ -134,7 +134,7 @@ async fn request_handler(
                     .await
                     .unwrap()
                     .to_vec();
-                match compute(data, options.clone(), cid.to_string()).await {
+                match compute(data, options.clone(), cid.to_string(), None).await {
                     Ok(cid) => {
                         let json_response = serde_json::json!({
                             "cid": Cid::try_from(cid).unwrap().to_string(),
@@ -212,9 +212,12 @@ async fn request_handler(
                     .body(Body::from(json_error))
                     .unwrap();
             }
+
             thread::spawn(move || {
                 let _ = task::block_on(async {
-                    match compute(body.clone(), options.clone(), cid.to_string()).await {
+                    let max_cycles: Option<u64> = Some(u64::MAX);
+
+                    match compute(body.clone(), options.clone(), cid.to_string(), max_cycles).await {
                         Ok(resulted_cid) => {
                             send_callback(body, CallbackData::ComputeOutput(resulted_cid.to_string()), cid.to_string(), callback_uri).await
                         }
@@ -645,6 +648,7 @@ async fn compute(
     data: Vec<u8>,
     options: Arc<lambada::Options>,
     cid: String,
+    max_cycles: Option<u64>
 ) -> Result<Cid, std::io::Error> {
     let cartesi_machine_url = options.cartesi_machine_url.clone();
     let ipfs_url = options.ipfs_url.as_str();
@@ -668,6 +672,7 @@ async fn compute(
         data,
         state_cid,
         block_info,
+        max_cycles
     )
     .await
 }
