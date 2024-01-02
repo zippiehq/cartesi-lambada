@@ -58,6 +58,7 @@ pub async fn execute(
     payload: Vec<u8>,
     state_cid: Cid,
     block_info: &L1BlockInfo,
+    max_cycles: Option<u64>
 ) -> Result<Cid, std::io::Error> {
     tracing::info!("state cid {:?}", state_cid.to_string());
 
@@ -199,7 +200,15 @@ pub async fn execute(
             .unwrap();
     }
 
+    let mut current_cycle = 0;
+
     loop {
+        current_cycle += 1;
+        if let Some(m_cycle) = max_cycles {
+            if m_cycle < current_cycle {
+                return Err(std::io::Error::new(std::io::ErrorKind::Other, "reached cycles limit before completion of execution"));
+            }
+        }
         let mut interpreter_break_reason = Value::Null;
         // Are we yielded? If not, continue machine execution
         // TODO: limit cycles if in compute mode
