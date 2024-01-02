@@ -176,6 +176,8 @@ async fn request_handler(
 
             let mut callback_uri: std::result::Result<Uri, std::string::String> =
                 Err("Callback parameter wasn't set".to_string());
+            let mut max_cycles: Option<u64> = None;
+
             for query in parsed_query {
                 if query.0.eq("callback") {
                     match query.1.parse::<hyper::Uri>() {
@@ -187,7 +189,26 @@ async fn request_handler(
                         }
                     };
                 }
+                if query.0.eq("max_cycles") {
+                    match query.1.parse::<u64>() {
+                        Ok(cycles) => {
+                            max_cycles = Some(cycles);
+                        }
+                        Err(e) => {
+                            tracing::info!("max_cycles should be u64 type");
+                            let json_error = serde_json::json!({
+                                "error": e.to_string(),
+                            });
+                            let json_error = serde_json::to_string(&json_error).unwrap();
+                            return Response::builder()
+                                .status(StatusCode::BAD_REQUEST)
+                                .body(Body::from(json_error))
+                                .unwrap();
+                        }
+                    };
+                }
             }
+
             let callback_uri = match callback_uri {
                 Ok(uri) => Arc::new(uri),
                 Err(e) => {
@@ -215,14 +236,25 @@ async fn request_handler(
 
             thread::spawn(move || {
                 let _ = task::block_on(async {
-                    let max_cycles: Option<u64> = Some(u64::MAX);
-
-                    match compute(body.clone(), options.clone(), cid.to_string(), max_cycles).await {
+                    match compute(body.clone(), options.clone(), cid.to_string(), max_cycles).await
+                    {
                         Ok(resulted_cid) => {
-                            send_callback(body, CallbackData::ComputeOutput(resulted_cid.to_string()), cid.to_string(), callback_uri).await
+                            send_callback(
+                                body,
+                                CallbackData::ComputeOutput(resulted_cid.to_string()),
+                                cid.to_string(),
+                                callback_uri,
+                            )
+                            .await
                         }
                         Err(e) => {
-                            send_callback(body, CallbackData::Error(e.to_string()), cid.to_string(), callback_uri).await
+                            send_callback(
+                                body,
+                                CallbackData::Error(e.to_string()),
+                                cid.to_string(),
+                                callback_uri,
+                            )
+                            .await
                         }
                     }
                 });
@@ -648,7 +680,7 @@ async fn compute(
     data: Vec<u8>,
     options: Arc<lambada::Options>,
     cid: String,
-    max_cycles: Option<u64>
+    max_cycles: Option<u64>,
 ) -> Result<Cid, std::io::Error> {
     let cartesi_machine_url = options.cartesi_machine_url.clone();
     let ipfs_url = options.ipfs_url.as_str();
@@ -672,7 +704,7 @@ async fn compute(
         data,
         state_cid,
         block_info,
-        max_cycles
+        max_cycles,
     )
     .await
 }
