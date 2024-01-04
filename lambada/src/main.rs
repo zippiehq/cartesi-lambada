@@ -32,6 +32,7 @@ async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
         espresso_testnet_sequencer_url: options.espresso_testnet_sequencer_url.clone(),
         celestia_testnet_sequencer_url: options.celestia_testnet_sequencer_url.clone(),
         ipfs_url: options.ipfs_url.clone(),
+        ipfs_write_url: options.ipfs_write_url.clone(),
         db_path: options.db_path.clone(),
         base_cartesi_machine_path: options.machine_dir.clone(),
     };
@@ -351,7 +352,7 @@ async fn request_handler(
         (hyper::Method::GET, ["new", app_cid]) => {
             let random_number: u64 = rand::thread_rng().gen();
 
-            let ipfs_client = IpfsClient::from_str(options.ipfs_url.clone().as_str()).unwrap();
+            let ipfs_client = IpfsClient::from_str(options.ipfs_write_url.clone().as_str()).unwrap();
             ipfs_client
                 .files_mkdir(&format!("/new-{}", random_number), false)
                 .await
@@ -684,6 +685,7 @@ async fn compute(
 ) -> Result<Cid, std::io::Error> {
     let cartesi_machine_url = options.cartesi_machine_url.clone();
     let ipfs_url = options.ipfs_url.as_str();
+    let ipfs_write_url = options.ipfs_write_url.as_str();
 
     let cartesi_machine_path = options.machine_dir.as_str();
 
@@ -701,6 +703,7 @@ async fn compute(
         forked_machine_url,
         cartesi_machine_path,
         ipfs_url,
+        ipfs_write_url,
         data,
         state_cid,
         block_info,
