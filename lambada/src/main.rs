@@ -352,7 +352,8 @@ async fn request_handler(
         (hyper::Method::GET, ["new", app_cid]) => {
             let random_number: u64 = rand::thread_rng().gen();
 
-            let ipfs_client = IpfsClient::from_str(options.ipfs_write_url.clone().as_str()).unwrap();
+            let ipfs_client =
+                IpfsClient::from_str(options.ipfs_write_url.clone().as_str()).unwrap();
             ipfs_client
                 .files_mkdir(&format!("/new-{}", random_number), false)
                 .await

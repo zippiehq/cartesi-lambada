@@ -205,15 +205,13 @@ pub async fn execute(
     if let Some(m_cycle) = max_cycles_input {
         max_cycles = m_cycle;
     }
-
     loop {
-
         let mut interpreter_break_reason = Value::Null;
         // Are we yielded? If not, continue machine execution
         if !machine.read_iflags_y().await.unwrap() {
             interpreter_break_reason = machine.run(max_cycles).await.unwrap();
         }
-        
+
         // XXX remove, for debugging
         let hex_encoded = hex::encode(
             machine
@@ -596,7 +594,10 @@ pub async fn execute(
             tracing::info!("reached cycles limit before completion of execution");
             machine.destroy().await.unwrap();
             machine.shutdown().await.unwrap();
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, "reached cycles limit before completion of execution"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "reached cycles limit before completion of execution",
+            ));
         }
         // After handling the operation, we clear the yield flag and loop back and continue execution of machine
         machine.reset_iflags_y().await.unwrap();

@@ -58,7 +58,6 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
         let count_rows = statement.iter().filter(|row| row.is_ok()).count();
 
         if count_rows == 1 {
-
             let mut statement = connection
                 .prepare("INSERT INTO blocks (state_cid, height) VALUES (?, ?)")
                 .unwrap();
