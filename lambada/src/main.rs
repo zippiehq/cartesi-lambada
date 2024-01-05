@@ -260,13 +260,7 @@ async fn request_handler(
             }
             thread::spawn(move || {
                 let _ = task::block_on(async {
-                    match compute(
-                        data.clone(),
-                        options.clone(),
-                        cid.to_string(),
-                        max_cycles,
-                    )
-                    .await
+                    match compute(data.clone(), options.clone(), cid.to_string(), max_cycles).await
                     {
                         Ok(resulted_cid) => {
                             send_callback(

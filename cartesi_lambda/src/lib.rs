@@ -347,9 +347,7 @@ pub async fn execute(
                     });
                 }
                 if payload.is_none() {
-                    tracing::info!(
-                        "machine warmed up",
-                    );
+                    tracing::info!("machine warmed up");
                     machine.destroy().await.unwrap();
                     machine.shutdown().await.unwrap();
                     return Ok(Cid::default());
