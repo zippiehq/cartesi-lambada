@@ -25,4 +25,3 @@ pub struct Options {
     #[clap(long, env = "IPFS_WRITE_URL")]
     pub ipfs_write_url: String,
 }
-
