@@ -135,7 +135,7 @@ async fn request_handler(
                     .await
                     .unwrap()
                     .to_vec();
-                match compute(data, options.clone(), cid.to_string(), None).await {
+                match compute(Some(data), options.clone(), cid.to_string(), None).await {
                     Ok(cid) => {
                         let json_response = serde_json::json!({
                             "cid": Cid::try_from(cid).unwrap().to_string(),
@@ -169,15 +169,12 @@ async fn request_handler(
             }
         }
         (hyper::Method::POST, ["compute_with_callback", cid]) => {
-            let body = hyper::body::to_bytes(request.into_body())
-                .await
-                .unwrap()
-                .to_vec();
             let cid = Arc::new(cid.to_string());
 
             let mut callback_uri: std::result::Result<Uri, std::string::String> =
                 Err("Callback parameter wasn't set".to_string());
             let mut max_cycles: Option<u64> = None;
+            let mut only_warmup: bool = false;
 
             for query in parsed_query {
                 if query.0.eq("callback") {
@@ -208,8 +205,26 @@ async fn request_handler(
                         }
                     };
                 }
-            }
 
+                if query.0.eq("only_warmup") {
+                    match query.1.parse::<bool>() {
+                        Ok(warmup) => {
+                            only_warmup = warmup;
+                        }
+                        Err(e) => {
+                            tracing::info!("only_warmup should be boolean type");
+                            let json_error = serde_json::json!({
+                                "error": e.to_string(),
+                            });
+                            let json_error = serde_json::to_string(&json_error).unwrap();
+                            return Response::builder()
+                                .status(StatusCode::BAD_REQUEST)
+                                .body(Body::from(json_error))
+                                .unwrap();
+                        }
+                    };
+                }
+            }
             let callback_uri = match callback_uri {
                 Ok(uri) => Arc::new(uri),
                 Err(e) => {
@@ -234,14 +249,22 @@ async fn request_handler(
                     .body(Body::from(json_error))
                     .unwrap();
             }
-
+            let mut data = None;
+            if !only_warmup {
+                data = Some(
+                    hyper::body::to_bytes(request.into_body())
+                        .await
+                        .unwrap()
+                        .to_vec(),
+                );
+            }
             thread::spawn(move || {
                 let _ = task::block_on(async {
-                    match compute(body.clone(), options.clone(), cid.to_string(), max_cycles).await
+                    match compute(data.clone(), options.clone(), cid.to_string(), max_cycles).await
                     {
                         Ok(resulted_cid) => {
                             send_callback(
-                                body,
+                                data,
                                 CallbackData::ComputeOutput(resulted_cid.to_string()),
                                 cid.to_string(),
                                 callback_uri,
@@ -250,7 +273,7 @@ async fn request_handler(
                         }
                         Err(e) => {
                             send_callback(
-                                body,
+                                data,
                                 CallbackData::Error(e.to_string()),
                                 cid.to_string(),
                                 callback_uri,
@@ -679,7 +702,7 @@ async fn request_handler(
 }
 
 async fn compute(
-    data: Vec<u8>,
+    data: Option<Vec<u8>>,
     options: Arc<lambada::Options>,
     cid: String,
     max_cycles: Option<u64>,
@@ -714,13 +737,13 @@ async fn compute(
 }
 
 async fn send_callback(
-    body: Vec<u8>,
+    body: Option<Vec<u8>>,
     callback_data: CallbackData,
     cid: String,
     callback_uri: Arc<Uri>,
 ) -> hyper::Response<Body> {
     let mut data = serde_json::Value::Null;
-
+    let body = body.unwrap_or_default();
     match callback_data {
         CallbackData::ComputeOutput(resulted_cid) => {
             data = serde_json::json!({

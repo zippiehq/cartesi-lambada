@@ -231,7 +231,7 @@ async fn get_chain_info_cid(opt: &ExecutorOptions, current_cid: Cid) -> Option<C
 async fn handle_tx(
     machine: &JsonRpcCartesiMachineClient,
     opt: ExecutorOptions,
-    data: Vec<u8>,
+    data: Option<Vec<u8>>,
     current_cid: &mut Cid,
     block_info: &L1BlockInfo,
     height: u64,
@@ -377,7 +377,7 @@ async fn subscribe_espresso(
                             handle_tx(
                                 &machine,
                                 opt.clone(),
-                                tx.payload().to_vec(),
+                                Some(tx.payload().to_vec()),
                                 current_cid,
                                 &block_info,
                                 height,
@@ -461,7 +461,7 @@ async fn subscribe_celestia(
                                     handle_tx(
                                         &machine,
                                         opt.clone(),
-                                        blob.data,
+                                        Some(blob.data),
                                         current_cid,
                                         block_info,
                                         state.height,

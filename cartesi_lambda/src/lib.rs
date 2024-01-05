@@ -56,7 +56,7 @@ pub async fn execute(
     cartesi_machine_path: &str,
     ipfs_url: &str,
     ipfs_write_url: &str,
-    payload: Vec<u8>,
+    payload: Option<Vec<u8>>,
     state_cid: Cid,
     block_info: &L1BlockInfo,
     max_cycles_input: Option<u64>,
@@ -346,6 +346,12 @@ pub async fn execute(
                         });
                     });
                 }
+                if payload.is_none() {
+                    tracing::info!("machine warmed up");
+                    machine.destroy().await.unwrap();
+                    machine.shutdown().await.unwrap();
+                    return Ok(Cid::default());
+                }
                 let cid_length = state_cid.clone().to_bytes().len() as u64;
 
                 machine
@@ -363,7 +369,7 @@ pub async fn execute(
                     .await
                     .unwrap();
 
-                let payload_length = payload.clone().len() as u64;
+                let payload_length = payload.clone().unwrap().len() as u64;
 
                 machine
                     .write_memory(
@@ -375,7 +381,7 @@ pub async fn execute(
                 machine
                     .write_memory(
                         MACHINE_IO_ADDRESSS + 24 + cid_length,
-                        STANDARD.encode(payload.clone()),
+                        STANDARD.encode(payload.clone().unwrap()),
                     )
                     .await
                     .unwrap();
