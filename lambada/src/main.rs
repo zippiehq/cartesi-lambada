@@ -135,7 +135,7 @@ async fn request_handler(
                     .await
                     .unwrap()
                     .to_vec();
-                match compute(data, options.clone(), cid.to_string(), None).await {
+                match compute(Some(data), options.clone(), cid.to_string(), None).await {
                     Ok(cid) => {
                         let json_response = serde_json::json!({
                             "cid": Cid::try_from(cid).unwrap().to_string(),
@@ -237,7 +237,7 @@ async fn request_handler(
 
             thread::spawn(move || {
                 let _ = task::block_on(async {
-                    match compute(body.clone(), options.clone(), cid.to_string(), max_cycles).await
+                    match compute(Some(body.clone()), options.clone(), cid.to_string(), max_cycles).await
                     {
                         Ok(resulted_cid) => {
                             send_callback(
@@ -679,7 +679,7 @@ async fn request_handler(
 }
 
 async fn compute(
-    data: Vec<u8>,
+    data: Option<Vec<u8>>,
     options: Arc<lambada::Options>,
     cid: String,
     max_cycles: Option<u64>,
