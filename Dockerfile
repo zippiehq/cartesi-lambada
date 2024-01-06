@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 zippiehq/cartesi-lambada-base-image:1.1 AS lambada-image
+FROM --platform=linux/amd64 zippiehq/cartesi-lambada-base-image:1.2 AS lambada-image
 
 FROM debian:bookworm-20230725-slim AS build
 RUN apt-get update && DEBIAN_FRONTEND="noninteractive" apt-get install -y curl build-essential libssl-dev pkg-config protobuf-compiler
