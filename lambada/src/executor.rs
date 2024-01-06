@@ -137,11 +137,11 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
             current_height = starting_block_height;
         }
 
-        if current_height < starting_block_height {
+        /* if current_height < starting_block_height {
             tracing::error!("Current height less than starting block height in chain info, should not be possible");
             return;
-        }
-
+        } */
+ 
         tracing::info!("iterating through blocks from height {:?}", current_height);
 
         let r#type: String = chain_info
