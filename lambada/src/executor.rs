@@ -54,7 +54,7 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
     height INTEGER NOT NULL);
 ";
         connection.execute(query).unwrap();
-        let mut statement = connection.prepare("SELECT COUNT(*) FROM blocks").unwrap();
+        /* let mut statement = connection.prepare("SELECT COUNT(*) FROM blocks").unwrap();
         let count_rows = statement.iter().filter(|row| row.is_ok()).count();
 
         if count_rows == 1 {
@@ -66,7 +66,8 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
                 .unwrap();
             statement.bind((2, 1 as i64)).unwrap();
             statement.next().unwrap();
-        }
+        } */
+
         // Get the latest CID and height
         let mut statement = connection
             .prepare("SELECT * FROM blocks ORDER BY height DESC LIMIT 1")
@@ -137,11 +138,11 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
             current_height = starting_block_height;
         }
 
-        /* if current_height < starting_block_height {
+        if current_height < starting_block_height {
             tracing::error!("Current height less than starting block height in chain info, should not be possible");
             return;
-        } */
- 
+        }
+
         tracing::info!("iterating through blocks from height {:?}", current_height);
 
         let r#type: String = chain_info
