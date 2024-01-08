@@ -86,23 +86,13 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
         if initial_block_height < 0 {
             initial_block_height = 0
         };
-      
+
         let mut statement = connection
             .prepare("SELECT * FROM blocks ORDER BY height DESC LIMIT 1")
             .unwrap();
 
         if let Ok(State::Row) = statement.next() {
             let height = statement.read::<i64, _>("height").unwrap() as u64;
-            if height < initial_block_height as u64 {
-                let mut statement = connection
-                    .prepare("INSERT INTO blocks (state_cid, height) VALUES (?, ?)")
-                    .unwrap();
-                statement
-                    .bind((1, &current_cid.to_bytes() as &[u8]))
-                    .unwrap();
-                statement.bind((2, initial_block_height as i64)).unwrap();
-                statement.next().unwrap();
-            }
             let cid = Cid::try_from(statement.read::<Vec<u8>, _>("state_cid").unwrap()).unwrap();
             tracing::info!(
                 "persisted state of chain {:?} is height {:?} = CID {:?}",
@@ -113,7 +103,14 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
             current_cid = cid;
             current_height = height;
         } else {
-            tracing::info!("new chain, not persisted: {:?}", genesis_cid_text);
+            let mut statement = connection
+                .prepare("INSERT INTO blocks (state_cid, height) VALUES (?, ?)")
+                .unwrap();
+            statement
+                .bind((1, &current_cid.to_bytes() as &[u8]))
+                .unwrap();
+            statement.bind((2, initial_block_height as i64)).unwrap();
+            statement.next().unwrap();
         }
     }
     // Set what our current chain info is, so we can notice later on if it changes
