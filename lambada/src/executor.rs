@@ -103,6 +103,7 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
             current_cid = cid;
             current_height = height;
         } else {
+            tracing::info!("new chain, not persisted: {:?}", genesis_cid_text);
             let mut statement = connection
                 .prepare("INSERT INTO blocks (state_cid, height) VALUES (?, ?)")
                 .unwrap();
