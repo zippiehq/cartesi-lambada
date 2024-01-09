@@ -17,6 +17,7 @@ use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use jf_primitives::merkle_tree::namespaced_merkle_tree::NamespaceProof;
 use sequencer::SeqTypes;
 use sqlite::State;
+use std::str::FromStr;
 use std::{
     sync::{Arc, Mutex},
     time::SystemTime,
@@ -24,6 +25,41 @@ use std::{
 
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;
 #[derive(Clone, Debug)]
+
+pub struct EthereumClient {
+    contract: Contract<SignerMiddleware<Provider<Http>, Wallet>>,
+}
+
+impl EthereumClient {
+    pub async fn new(
+        provider_url: &str,
+        wallet_private_key: &str,
+        contract_address: &str,
+        contract_abi: &str,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let provider = Provider::<Http>::try_from(provider_url)?;
+        let wallet = Wallet::from_str(wallet_private_key)?;
+        let client = SignerMiddleware::new(provider, wallet);
+
+        let contract_address = contract_address.parse::<Address>()?;
+        let contract = Contract::new(contract_address, contract_abi.parse()?, Arc::new(client));
+
+        Ok(EthereumClient { contract })
+    }
+
+    pub async fn add_block(
+        &self,
+        block_height: u64,
+        state_cid: Vec<u8>,
+    ) -> Result<TxHash, Box<dyn std::error::Error>> {
+        self.contract
+            .method::<_, TxHash>("addBlock", (block_height.into(), state_cid))
+            .expect("Contract method call setup failed")
+            .send()
+            .await
+            .map_err(Into::into)
+    }
+}
 pub struct ExecutorOptions {
     pub espresso_testnet_sequencer_url: String,
     pub celestia_testnet_sequencer_url: String,
@@ -237,6 +273,7 @@ async fn handle_tx(
     block_info: &L1BlockInfo,
     height: u64,
     genesis_cid_text: String,
+    ethereum_client: &EthereumClient,
 ) {
     let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
 
@@ -272,6 +309,14 @@ async fn handle_tx(
             "resulted current_cid {:?}",
             Cid::try_from(current_cid.clone()).unwrap().to_string()
         );
+
+        match ethereum_client
+            .add_block(height, current_cid.to_bytes())
+            .await
+        {
+            Ok(tx_hash) => tracing::info!("tx sent: {:?}", tx_hash),
+            Err(e) => tracing::error!("Failed to sent tx: {:?}", e),
+        }
     } else {
         tracing::info!("EXECUTE FAILED: reusing current_cid, as transaction failed");
     }
@@ -383,6 +428,7 @@ async fn subscribe_espresso(
                                 &block_info,
                                 height,
                                 genesis_cid_text.clone(),
+                                &ethereum_client,
                             )
                             .await;
                         }
@@ -467,6 +513,7 @@ async fn subscribe_celestia(
                                         block_info,
                                         state.height,
                                         genesis_cid_text.clone(),
+                                        &ethereum_client,
                                     )
                                     .await;
                                 }

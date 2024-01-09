@@ -1,3 +1,4 @@
+use crate::executor::EthereumClient;
 use async_compatibility_layer::logging::{setup_backtrace, setup_logging};
 use async_std::sync::Mutex;
 use async_std::task;
@@ -788,6 +789,7 @@ async fn send_callback(
         }
     };
 }
+
 #[derive(Serialize, Deserialize)]
 struct Data {
     vm: u64,
