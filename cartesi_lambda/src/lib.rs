@@ -348,6 +348,10 @@ pub async fn execute(
                                 tracing::info!("done snapshotting app {}", app_cid.clone());
                             });
                         });
+                    } else {
+                        tracing::info!(
+                            "did not manage to create lock, snapshot might already be in progress"
+                        );
                     }
                 } else {
                     tracing::info!("snapshot of app already being stored or stored, skipping snapshot (lock file exists)")
@@ -550,6 +554,10 @@ pub async fn execute(
                                 tracing::info!("done snapshotting base");
                             });
                         });
+                    } else {
+                        tracing::info!(
+                            "did not manage to create lock, snapshot might already be in progress"
+                        );
                     }
                 } else {
                     tracing::info!("snapshot of base already exists or lock file exists, skipping");
