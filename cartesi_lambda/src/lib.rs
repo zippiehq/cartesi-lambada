@@ -162,7 +162,6 @@ pub async fn execute(
         );
 
         machine_loaded_state = 2;
-        tracing::info!("read iflag y {:?}", machine.read_iflags_y().await.unwrap());
     } else if std::path::Path::new(&format!("/data/snapshot/base")).exists() {
         // There is a snapshot of this base machine initialized and waiting to be populated with an app that'll initialize (LOAD_APP)
         while std::path::Path::new("/data/snapshot/base.lock").exists() {
@@ -214,23 +213,9 @@ pub async fn execute(
             interpreter_break_reason = machine.run(max_cycles).await.unwrap();
         }
 
-        // XXX remove, for debugging
-        let hex_encoded = hex::encode(
-            machine
-                .read_memory(MACHINE_IO_ADDRESSS, 1024)
-                .await
-                .unwrap(),
-        );
-
         // Command/opcode is 64-bit big endian value at MACHINE_IO_ADDRESSS
         let read_opt_be_bytes = machine.read_memory(MACHINE_IO_ADDRESSS, 8).await.unwrap();
         let opt = u64::from_be_bytes(read_opt_be_bytes.try_into().unwrap());
-
-        // XXX remove, for debugging
-        tracing::info!(
-            "before handling iflag y {:?}",
-            machine.read_iflags_y().await.unwrap()
-        );
 
         match opt {
             // Handles the READ_BLOCK action: [IPFS "dehashing"]
@@ -308,7 +293,18 @@ pub async fn execute(
             // 10. Extracts the `hash` from `block_info` and writes it to the machine's memory at `MACHINE_IO_ADDRESSS + 32 + block_timestamp.len() + cid_length + payload_length`.
             LOAD_TX => {
                 tracing::info!("LOAD_TX");
-                if machine_loaded_state == 0 || machine_loaded_state == 1 {
+                if !std::path::Path::new(&format!(
+                    "/data/snapshot/base_{}.lock",
+                    app_cid.clone().to_string()
+                ))
+                .exists()
+                    && !std::path::Path::new(&format!(
+                        "/data/snapshot/base_{}",
+                        app_cid.clone().to_string()
+                    ))
+                    .exists()
+                    && (machine_loaded_state == 0 || machine_loaded_state == 1)
+                {
                     File::create(format!(
                         "/data/snapshot/base_{}.lock",
                         app_cid.clone().to_string()
@@ -325,9 +321,8 @@ pub async fn execute(
                             let app_cid: cid::CidGeneric<64> =
                                 Cid::try_from(arc_app_cid.to_string()).unwrap();
                             tracing::info!(
-                                "snapshot stage load tx to dir: {} and read iflag : {}",
-                                format!("/data/snapshot/base_{}", app_cid.clone().to_string()),
-                                forked_machine.read_iflags_y().await.unwrap()
+                                "snapshot stage load tx to dir: {}",
+                                format!("/data/snapshot/base_{}", app_cid.clone().to_string())
                             );
 
                             forked_machine
@@ -347,6 +342,8 @@ pub async fn execute(
                             tracing::info!("done snapshotting app {}", app_cid.clone());
                         });
                     });
+                } else {
+                    tracing::info!("snapshot of app already being stored or stored, skipping snapshot (lock file exists)")
                 }
                 if payload.is_none() {
                     tracing::info!("machine warmed up");
@@ -518,7 +515,10 @@ pub async fn execute(
             LOAD_APP => {
                 tracing::info!("LOAD_APP");
 
-                if machine_loaded_state == 0 {
+                if !std::path::Path::new("/data/snapshot/base").exists()
+                    && !std::path::Path::new("/data/snapshot/base.lock").exists()
+                    && machine_loaded_state == 0
+                {
                     let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
                     File::create("/data/snapshot/base.lock").unwrap();
                     thread::spawn(move || {
@@ -527,10 +527,7 @@ pub async fn execute(
                                 JsonRpcCartesiMachineClient::new(forked_machine_url)
                                     .await
                                     .unwrap();
-                            tracing::info!(
-                        "snapshot stage load app to dir: /data/snapshot/base and read iflag : {}",
-                        forked_machine.read_iflags_y().await.unwrap()
-                    );
+                            tracing::info!("snapshot stage load app to dir: /data/snapshot/base");
                             forked_machine.store("/data/snapshot/base").await.unwrap();
                             forked_machine.destroy().await.unwrap();
                             forked_machine.shutdown().await.unwrap();
@@ -538,6 +535,8 @@ pub async fn execute(
                             tracing::info!("done snapshotting base");
                         });
                     });
+                } else {
+                    tracing::info!("snapshot of base already exists or lock file exists, skipping");
                 }
                 let app_cid: cid::CidGeneric<64> = Cid::try_from(app_cid.clone()).unwrap();
 
@@ -591,12 +590,15 @@ pub async fn execute(
                 tracing::info!("unknown opt {:?}", opt)
             }
         }
-        // XXX We should basically not get here in a well-behaved app, it should FINISH (accept/reject), EXCEPTION
+        // We should basically not get here in a well-behaved app, it should FINISH (accept/reject), EXCEPTION
         if interpreter_break_reason == Value::String("halted".to_string()) {
             tracing::info!("halted");
             machine.destroy().await.unwrap();
             machine.shutdown().await.unwrap();
-            // XXX we should return here
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "machine halted without finishing, exception",
+            ));
         }
         if interpreter_break_reason == Value::String("reached_target_mcycle".to_string()) {
             tracing::info!("reached cycles limit before completion of execution");
