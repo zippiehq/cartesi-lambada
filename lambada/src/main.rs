@@ -717,11 +717,21 @@ async fn compute(
         .await
         .unwrap();
     let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
-    let state_cid = Cid::try_from(cid).unwrap();
+    let state_cid = Cid::try_from(cid.clone()).unwrap();
     let block_info: &L1BlockInfo = &L1BlockInfo {
         number: 0,
         timestamp: U256([0; 4]),
         hash: H256([0; 32]),
+    };
+    let mut app_path = None;
+    let ipfs_client = IpfsClient::from_str(&options.ipfs_url).unwrap();
+    match ipfs_client.files_stat(&format!("/{}{}", cid, "/gov/chain-info.json")).await {
+            Ok(_) => {
+                app_path = Some("/gov");
+                tracing::info!("Directory /appwas moved to /gov/app");
+            }
+            Err(_) => {
+            }
     };
     execute(
         forked_machine_url,
@@ -732,6 +742,7 @@ async fn compute(
         state_cid,
         block_info,
         max_cycles,
+        app_path
     )
     .await
 }
