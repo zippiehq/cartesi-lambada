@@ -60,6 +60,7 @@ pub async fn execute(
     state_cid: Cid,
     block_info: &L1BlockInfo,
     max_cycles_input: Option<u64>,
+    app_path: Option<&str>,
 ) -> Result<Cid, std::io::Error> {
     tracing::info!("state cid {:?}", state_cid.to_string());
 
@@ -67,9 +68,10 @@ pub async fn execute(
     let req = Request::builder()
         .method("POST")
         .uri(format!(
-            "{}/api/v0/dag/resolve?arg={}/app",
+            "{}/api/v0/dag/resolve?arg={}{}/app",
             ipfs_url,
-            state_cid.to_string()
+            state_cid.to_string(),
+            app_path.unwrap_or_default()
         ))
         .body(hyper::Body::empty())
         .unwrap();

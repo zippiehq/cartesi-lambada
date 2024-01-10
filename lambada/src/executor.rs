@@ -34,6 +34,8 @@ pub struct ExecutorOptions {
 }
 
 pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appchain: Cid) {
+    let mut chain_info_path = "/app";
+
     tracing::info!("starting subscribe() of {:?}", appchain.to_string());
 
     let mut current_cid = appchain.clone();
@@ -46,7 +48,20 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
         .unwrap();
     // Make sure database is set up
     let ipfs_client = IpfsClient::from_str(&opt.ipfs_url).unwrap();
-
+    match ipfs_client
+        .files_stat(&format!(
+            "/{}{}",
+            current_cid.to_string(),
+            "/gov/chain-info.json"
+        ))
+        .await
+    {
+        Ok(_) => {
+            chain_info_path = "/gov";
+            tracing::info!("deprecated behaviour: directory /app/chain-info.json was moved to /gov/chain-info.json");
+        }
+        Err(_) => {}
+    };
     {
         let connection =
             sqlite::Connection::open_thread_safe(format!("{}/{}", opt.db_path, genesis_cid_text))
@@ -58,7 +73,11 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
         connection.execute(query).unwrap();
 
         let chain_info = ipfs_client
-            .cat(&(current_cid.to_string() + "/app/chain-info.json"))
+            .cat(&format!(
+                "{}{}/chain-info.json",
+                current_cid.to_string(),
+                chain_info_path.to_string()
+            ))
             .map_ok(|chunk| chunk.to_vec())
             .try_concat()
             .await
@@ -115,8 +134,9 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
         }
     }
     // Set what our current chain info is, so we can notice later on if it changes
-    let current_chain_info_cid: Arc<Mutex<Option<Cid>>> =
-        Arc::new(Mutex::new(get_chain_info_cid(&opt, current_cid).await));
+    let current_chain_info_cid: Arc<Mutex<Option<Cid>>> = Arc::new(Mutex::new(
+        get_chain_info_cid(&opt, current_cid, chain_info_path).await,
+    ));
     if *current_chain_info_cid.lock().unwrap() == None {
         tracing::debug!("not chain info found, leaving");
         return;
@@ -125,7 +145,11 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
     loop {
         // Set up subscription: read what sequencer and (if we don't know it already)
         let chain_info = ipfs_client
-            .cat(&(current_cid.to_string() + "/app/chain-info.json"))
+            .cat(&format!(
+                "{}{}/chain-info.json",
+                current_cid.to_string(),
+                chain_info_path.to_string()
+            ))
             .map_ok(|chunk| chunk.to_vec())
             .try_concat()
             .await
@@ -193,6 +217,7 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
                     chain_info_cid,
                     chain_vm_id,
                     genesis_cid_text.clone(),
+                    chain_info_path,
                 )
                 .await;
             }
@@ -208,6 +233,7 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
                     &mut current_cid,
                     chain_vm_id,
                     genesis_cid_text.clone(),
+                    chain_info_path,
                 )
                 .await;
             }
@@ -218,14 +244,19 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
     }
 }
 
-async fn get_chain_info_cid(opt: &ExecutorOptions, current_cid: Cid) -> Option<Cid> {
+async fn get_chain_info_cid(
+    opt: &ExecutorOptions,
+    current_cid: Cid,
+    chain_info_path: &str,
+) -> Option<Cid> {
     let req = Request::builder()
         .method("POST")
         .uri(format!(
-            "{}/api/v0/dag/resolve?arg={}{}",
+            "{}/api/v0/dag/resolve?arg={}{}{}",
             opt.ipfs_url,
             current_cid.to_string(),
-            "/app/chain-info.json"
+            chain_info_path,
+            "/chain-info.json"
         ))
         .body(hyper::Body::empty())
         .unwrap();
@@ -262,6 +293,7 @@ async fn handle_tx(
     block_info: &L1BlockInfo,
     height: u64,
     genesis_cid_text: String,
+    app_path: Option<&str>,
 ) {
     let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
 
@@ -276,6 +308,7 @@ async fn handle_tx(
         current_cid.clone(),
         block_info,
         None,
+        app_path,
     )
     .await;
     let time_after_execute = SystemTime::now();
@@ -319,8 +352,9 @@ async fn is_chain_info_same(
     opt: ExecutorOptions,
     current_cid: Cid,
     current_chain_info_cid: Arc<Mutex<Option<Cid>>>,
+    app_path: &str,
 ) -> bool {
-    let new_chain_info = get_chain_info_cid(&opt, current_cid).await;
+    let new_chain_info = get_chain_info_cid(&opt, current_cid, app_path).await;
     if new_chain_info == None {
         tracing::error!("No chain info found, leaving");
         return false;
@@ -343,6 +377,7 @@ async fn subscribe_espresso(
     current_chain_info_cid: Arc<Mutex<Option<Cid>>>,
     chain_vm_id: u64,
     genesis_cid_text: String,
+    chain_info_path: &str,
 ) {
     let query_service_url = Url::parse(&sequencer_url)
         .unwrap()
@@ -362,7 +397,9 @@ async fn subscribe_espresso(
             Ok(block) => {
                 let chain_info_cid = Arc::clone(&current_chain_info_cid);
 
-                if !is_chain_info_same(opt.clone(), *current_cid, chain_info_cid).await {
+                if !is_chain_info_same(opt.clone(), *current_cid, chain_info_cid, chain_info_path)
+                    .await
+                {
                     return;
                 }
 
@@ -393,7 +430,10 @@ async fn subscribe_espresso(
                     .prepare("SELECT * FROM blocks WHERE height=?")
                     .unwrap();
                 statement.bind((1, height as i64)).unwrap();
-
+                let mut app_path = None;
+                if chain_info_path.eq("/gov") {
+                    app_path = Some(chain_info_path);
+                }
                 if let Ok(state) = statement.next() {
                     // We've not processed this block before, so let's process it (can we even end here since we set starting point?)
                     if state == State::Done {
@@ -408,6 +448,7 @@ async fn subscribe_espresso(
                                 &block_info,
                                 height,
                                 genesis_cid_text.clone(),
+                                app_path,
                             )
                             .await;
                         }
@@ -431,6 +472,7 @@ async fn subscribe_celestia(
     current_cid: &mut Cid,
     chain_vm_id: u64,
     genesis_cid_text: String,
+    chain_info_path: &str,
 ) {
     let token = match std::env::var("CELESTIA_TESTNET_NODE_AUTH_TOKEN_READ") {
         Ok(token) => token,
@@ -453,7 +495,9 @@ async fn subscribe_celestia(
                 .is_ok()
             {
                 let chain_info_cid = Arc::clone(&current_chain_info_cid);
-                if !is_chain_info_same(opt.clone(), *current_cid, chain_info_cid).await {
+                if !is_chain_info_same(opt.clone(), *current_cid, chain_info_cid, chain_info_path)
+                    .await
+                {
                     break;
                 }
                 let block_info: &L1BlockInfo = &L1BlockInfo {
@@ -478,7 +522,10 @@ async fn subscribe_celestia(
                             .prepare("SELECT * FROM blocks WHERE height=?")
                             .unwrap();
                         statement.bind((1, state.height as i64)).unwrap();
-
+                        let mut app_path = None;
+                        if chain_info_path.eq("/gov") {
+                            app_path = Some(chain_info_path);
+                        }
                         if let Ok(statement_state) = statement.next() {
                             // We've not processed this block before, so let's process it (can we even end here since we set starting point?)
                             if statement_state == State::Done {
@@ -492,6 +539,7 @@ async fn subscribe_celestia(
                                         block_info,
                                         state.height,
                                         genesis_cid_text.clone(),
+                                        app_path,
                                     )
                                     .await;
                                 }
