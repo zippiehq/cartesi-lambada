@@ -305,43 +305,54 @@ pub async fn execute(
                     .exists()
                     && (machine_loaded_state == 0 || machine_loaded_state == 1)
                 {
-                    File::create(format!(
-                        "/data/snapshot/base_{}.lock",
-                        app_cid.clone().to_string()
-                    ))
-                    .unwrap();
-                    let arc_app_cid = Arc::new(app_cid.clone());
-                    let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
-                    thread::spawn(move || {
-                        let _ = task::block_on(async move {
-                            let forked_machine =
-                                JsonRpcCartesiMachineClient::new(forked_machine_url)
+                    if std::fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .create_new(true)
+                        .open(format!(
+                            "/data/snapshot/base_{}.lock",
+                            app_cid.clone().to_string()
+                        ))
+                        .is_ok()
+                    {
+                        let arc_app_cid = Arc::new(app_cid.clone());
+                        let forked_machine_url =
+                            format!("http://{}", machine.fork().await.unwrap());
+                        thread::spawn(move || {
+                            let _ = task::block_on(async move {
+                                let forked_machine =
+                                    JsonRpcCartesiMachineClient::new(forked_machine_url)
+                                        .await
+                                        .unwrap();
+                                let app_cid: cid::CidGeneric<64> =
+                                    Cid::try_from(arc_app_cid.to_string()).unwrap();
+                                tracing::info!(
+                                    "snapshot stage load tx to dir: {}",
+                                    format!("/data/snapshot/base_{}", app_cid.clone().to_string())
+                                );
+
+                                forked_machine
+                                    .store(&format!(
+                                        "/data/snapshot/base_{}",
+                                        app_cid.clone().to_string(),
+                                    ))
                                     .await
                                     .unwrap();
-                            let app_cid: cid::CidGeneric<64> =
-                                Cid::try_from(arc_app_cid.to_string()).unwrap();
-                            tracing::info!(
-                                "snapshot stage load tx to dir: {}",
-                                format!("/data/snapshot/base_{}", app_cid.clone().to_string())
-                            );
-
-                            forked_machine
-                                .store(&format!(
-                                    "/data/snapshot/base_{}",
-                                    app_cid.clone().to_string(),
+                                forked_machine.destroy().await.unwrap();
+                                forked_machine.shutdown().await.unwrap();
+                                std::fs::remove_file(format!(
+                                    "/data/snapshot/base_{}.lock",
+                                    app_cid.clone().to_string()
                                 ))
-                                .await
                                 .unwrap();
-                            forked_machine.destroy().await.unwrap();
-                            forked_machine.shutdown().await.unwrap();
-                            std::fs::remove_file(format!(
-                                "/data/snapshot/base_{}.lock",
-                                app_cid.clone().to_string()
-                            ))
-                            .unwrap();
-                            tracing::info!("done snapshotting app {}", app_cid.clone());
+                                tracing::info!("done snapshotting app {}", app_cid.clone());
+                            });
                         });
-                    });
+                    } else {
+                        tracing::info!(
+                            "did not manage to create lock, snapshot might already be in progress"
+                        );
+                    }
                 } else {
                     tracing::info!("snapshot of app already being stored or stored, skipping snapshot (lock file exists)")
                 }
@@ -519,22 +530,37 @@ pub async fn execute(
                     && !std::path::Path::new("/data/snapshot/base.lock").exists()
                     && machine_loaded_state == 0
                 {
-                    let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
-                    File::create("/data/snapshot/base.lock").unwrap();
-                    thread::spawn(move || {
-                        let _ = task::block_on(async {
-                            let forked_machine =
-                                JsonRpcCartesiMachineClient::new(forked_machine_url)
-                                    .await
-                                    .unwrap();
-                            tracing::info!("snapshot stage load app to dir: /data/snapshot/base");
-                            forked_machine.store("/data/snapshot/base").await.unwrap();
-                            forked_machine.destroy().await.unwrap();
-                            forked_machine.shutdown().await.unwrap();
-                            std::fs::remove_file("/data/snapshot/base.lock").unwrap();
-                            tracing::info!("done snapshotting base");
+                    if std::fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .create_new(true)
+                        .open("/data/snapshot/base.lock")
+                        .is_ok()
+                    {
+                        let forked_machine_url =
+                            format!("http://{}", machine.fork().await.unwrap());
+
+                        thread::spawn(move || {
+                            let _ = task::block_on(async {
+                                let forked_machine =
+                                    JsonRpcCartesiMachineClient::new(forked_machine_url)
+                                        .await
+                                        .unwrap();
+                                tracing::info!(
+                                    "snapshot stage load app to dir: /data/snapshot/base"
+                                );
+                                forked_machine.store("/data/snapshot/base").await.unwrap();
+                                forked_machine.destroy().await.unwrap();
+                                forked_machine.shutdown().await.unwrap();
+                                std::fs::remove_file("/data/snapshot/base.lock").unwrap();
+                                tracing::info!("done snapshotting base");
+                            });
                         });
-                    });
+                    } else {
+                        tracing::info!(
+                            "did not manage to create lock, snapshot might already be in progress"
+                        );
+                    }
                 } else {
                     tracing::info!("snapshot of base already exists or lock file exists, skipping");
                 }
