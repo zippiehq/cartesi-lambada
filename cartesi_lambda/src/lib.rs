@@ -530,7 +530,6 @@ pub async fn execute(
                     && !std::path::Path::new("/data/snapshot/base.lock").exists()
                     && machine_loaded_state == 0
                 {
-                    let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
                     if std::fs::OpenOptions::new()
                         .read(true)
                         .write(true)
@@ -538,6 +537,9 @@ pub async fn execute(
                         .open("/data/snapshot/base.lock")
                         .is_ok()
                     {
+                        let forked_machine_url =
+                            format!("http://{}", machine.fork().await.unwrap());
+
                         thread::spawn(move || {
                             let _ = task::block_on(async {
                                 let forked_machine =
