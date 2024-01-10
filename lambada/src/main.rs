@@ -725,13 +725,15 @@ async fn compute(
     };
     let mut app_path = None;
     let ipfs_client = IpfsClient::from_str(&options.ipfs_url).unwrap();
-    match ipfs_client.files_stat(&format!("/{}{}", cid, "/gov/chain-info.json")).await {
-            Ok(_) => {
-                app_path = Some("/gov");
-                tracing::info!("Directory /appwas moved to /gov/app");
-            }
-            Err(_) => {
-            }
+    match ipfs_client
+        .files_stat(&format!("/{}{}", cid, "/gov/chain-info.json"))
+        .await
+    {
+        Ok(_) => {
+            app_path = Some("/gov");
+            tracing::info!("deprecated behaviour: directory /app was moved to /gov/app");
+        }
+        Err(_) => {}
     };
     execute(
         forked_machine_url,
@@ -742,7 +744,7 @@ async fn compute(
         state_cid,
         block_info,
         max_cycles,
-        app_path
+        app_path,
     )
     .await
 }

@@ -48,13 +48,19 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
         .unwrap();
     // Make sure database is set up
     let ipfs_client = IpfsClient::from_str(&opt.ipfs_url).unwrap();
-    match ipfs_client.files_stat(&format!("/{}{}", current_cid.to_string(), "/gov/chain-info.json")).await {
+    match ipfs_client
+        .files_stat(&format!(
+            "/{}{}",
+            current_cid.to_string(),
+            "/gov/chain-info.json"
+        ))
+        .await
+    {
         Ok(_) => {
             chain_info_path = "/gov";
-            tracing::info!("Directory /app/chain-info.json was moved to /gov/chain-info.json");
+            tracing::info!("deprecated behaviour: directory /app/chain-info.json was moved to /gov/chain-info.json");
         }
-        Err(_) => {
-        }
+        Err(_) => {}
     };
     {
         let connection =
@@ -371,7 +377,7 @@ async fn subscribe_espresso(
     current_chain_info_cid: Arc<Mutex<Option<Cid>>>,
     chain_vm_id: u64,
     genesis_cid_text: String,
-    chain_info_path: &str
+    chain_info_path: &str,
 ) {
     let query_service_url = Url::parse(&sequencer_url)
         .unwrap()
@@ -391,7 +397,9 @@ async fn subscribe_espresso(
             Ok(block) => {
                 let chain_info_cid = Arc::clone(&current_chain_info_cid);
 
-                if !is_chain_info_same(opt.clone(), *current_cid, chain_info_cid, chain_info_path).await {
+                if !is_chain_info_same(opt.clone(), *current_cid, chain_info_cid, chain_info_path)
+                    .await
+                {
                     return;
                 }
 
@@ -464,7 +472,7 @@ async fn subscribe_celestia(
     current_cid: &mut Cid,
     chain_vm_id: u64,
     genesis_cid_text: String,
-    chain_info_path: &str
+    chain_info_path: &str,
 ) {
     let token = match std::env::var("CELESTIA_TESTNET_NODE_AUTH_TOKEN_READ") {
         Ok(token) => token,
@@ -487,7 +495,9 @@ async fn subscribe_celestia(
                 .is_ok()
             {
                 let chain_info_cid = Arc::clone(&current_chain_info_cid);
-                if !is_chain_info_same(opt.clone(), *current_cid, chain_info_cid, chain_info_path).await {
+                if !is_chain_info_same(opt.clone(), *current_cid, chain_info_cid, chain_info_path)
+                    .await
+                {
                     break;
                 }
                 let block_info: &L1BlockInfo = &L1BlockInfo {
