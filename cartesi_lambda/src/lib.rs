@@ -293,7 +293,18 @@ pub async fn execute(
             // 10. Extracts the `hash` from `block_info` and writes it to the machine's memory at `MACHINE_IO_ADDRESSS + 32 + block_timestamp.len() + cid_length + payload_length`.
             LOAD_TX => {
                 tracing::info!("LOAD_TX");
-                if machine_loaded_state == 0 || machine_loaded_state == 1 {
+                if !std::path::Path::new(&format!(
+                    "/data/snapshot/base_{}.lock",
+                    app_cid.clone().to_string()
+                ))
+                .exists()
+                    && !std::path::Path::new(&format!(
+                        "/data/snapshot/base_{}",
+                        app_cid.clone().to_string()
+                    ))
+                    .exists()
+                    && (machine_loaded_state == 0 || machine_loaded_state == 1)
+                {
                     File::create(format!(
                         "/data/snapshot/base_{}.lock",
                         app_cid.clone().to_string()
@@ -331,6 +342,8 @@ pub async fn execute(
                             tracing::info!("done snapshotting app {}", app_cid.clone());
                         });
                     });
+                } else {
+                    tracing::info!("snapshot of app already being stored or stored, skipping snapshot (lock file exists)")
                 }
                 if payload.is_none() {
                     tracing::info!("machine warmed up");
@@ -502,7 +515,10 @@ pub async fn execute(
             LOAD_APP => {
                 tracing::info!("LOAD_APP");
 
-                if machine_loaded_state == 0 {
+                if !std::path::Path::new("/data/snapshot/base").exists()
+                    && !std::path::Path::new("/data/snapshot/base.lock").exists()
+                    && machine_loaded_state == 0
+                {
                     let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
                     File::create("/data/snapshot/base.lock").unwrap();
                     thread::spawn(move || {
@@ -519,6 +535,8 @@ pub async fn execute(
                             tracing::info!("done snapshotting base");
                         });
                     });
+                } else {
+                    tracing::info!("snapshot of base already exists or lock file exists, skipping");
                 }
                 let app_cid: cid::CidGeneric<64> = Cid::try_from(app_cid.clone()).unwrap();
 
