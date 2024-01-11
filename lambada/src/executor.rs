@@ -58,14 +58,15 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
     {
         Ok(_) => {
             chain_info_path = "/gov";
-            tracing::info!("deprecated behaviour: directory /app/chain-info.json was moved to /gov/chain-info.json");
         }
         Err(_) => {}
     };
     {
-        let connection =
-            sqlite::Connection::open_thread_safe(format!("{}/{}", opt.db_path, genesis_cid_text))
-                .unwrap();
+        let connection = sqlite::Connection::open_thread_safe(format!(
+            "{}/chains/{}",
+            opt.db_path, genesis_cid_text
+        ))
+        .unwrap();
         let query = "
     CREATE TABLE IF NOT EXISTS blocks (state_cid BLOB(48) NOT NULL,
     height INTEGER NOT NULL);
@@ -334,9 +335,11 @@ async fn handle_tx(
         tracing::info!("EXECUTE FAILED: reusing current_cid, as transaction failed");
     }
     // XXX Is this right? Shouldn't this be after processing all tx'es?
-    let connection =
-        sqlite::Connection::open_thread_safe(format!("{}/{}", opt.db_path, genesis_cid_text))
-            .unwrap();
+    let connection = sqlite::Connection::open_thread_safe(format!(
+        "{}/chains/{}",
+        opt.db_path, genesis_cid_text
+    ))
+    .unwrap();
 
     let mut statement = connection
         .prepare("INSERT INTO blocks (state_cid, height) VALUES (?, ?)")
@@ -422,7 +425,7 @@ async fn subscribe_espresso(
                 let height = block.height();
 
                 let connection = sqlite::Connection::open_thread_safe(format!(
-                    "{}/{}",
+                    "{}/chains/{}",
                     opt.db_path, genesis_cid_text
                 ))
                 .unwrap();
@@ -514,7 +517,7 @@ async fn subscribe_celestia(
                 {
                     Ok(blobs) => {
                         let connection = sqlite::Connection::open_thread_safe(format!(
-                            "{}/{}",
+                            "{}/chains/{}",
                             opt.db_path, genesis_cid_text
                         ))
                         .unwrap();
