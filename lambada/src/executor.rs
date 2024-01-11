@@ -12,11 +12,10 @@ use cid::Cid;
 use ethers::prelude::*;
 use futures_util::TryStreamExt;
 use hotshot_query_service::availability::BlockQueryData;
-use hyper::{Request, Method, Body};
+use hyper::{Body, Method, Request};
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use jf_primitives::merkle_tree::namespaced_merkle_tree::NamespaceProof;
 use sequencer::SeqTypes;
-use sqlite::State;
 use std::{
     sync::{Arc, Mutex},
     time::SystemTime,
@@ -290,29 +289,29 @@ async fn handle_tx(
     statement.bind((2, height as i64)).unwrap();
     statement.next().unwrap();
 
-let callback_connection = sqlite::Connection::open("block_callbacks.db").unwrap();
-let mut callback_stmt = callback_connection
-    .prepare("SELECT url_callback FROM callback_subscriptions WHERE genesis_block_cid = ?").unwrap();
-let callback_iter = callback_stmt.query_map(&[&genesis_cid_text], |row| row.get(0)).unwrap();
+    let callback_connection = sqlite::Connection::open("block_callbacks db").unwrap();
+    let mut callback_stmt = callback_connection
+        .prepare("SELECT url_callback FROM callback_subscriptions WHERE genesis_block_cid = ?")
+        .unwrap();
+    let callback_iter = callback_stmt.query_map([], |row| row.get(0)).unwrap();
 
-for callback_url in callback_iter {
-    if let Ok(url) = callback_url {
-        let client = Client::new();
-        let callback_data = serde_json::json!({
-            "appchain": current_cid.to_string(),
-            "block_height": height,
-            "state_cid": current_cid.to_string(),
-        });
-        let req_body = serde_json::to_string(&callback_data).unwrap();
-        let req = Request::builder()
-            .method(Method::POST)
-            .uri(url)
-            .header("Content-Type", "application/json")
-            .body(Body::from(req_body))
-            .expect("Failed to build request");
+    for callback_url in callback_iter {
+        if let Ok(url) = callback_url {
+            let client = Arc::new(hyper::Client::new());
+            let callback_data = serde_json::json!({
+                "appchain": current_cid.to_string(),
+                "block_height": height,
+                "state_cid": current_cid.to_string(),
+            });
+            let req_body = serde_json::to_string(&callback_data).unwrap();
+            let req = Request::builder()
+                .method(Method::POST)
+                .uri(url)
+                .header("Content-Type", "application/json")
+                .body(Body::from(req_body))
+                .expect("Failed to build request");
+        }
     }
-}
-
 }
 
 async fn is_chain_info_same(

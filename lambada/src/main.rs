@@ -389,7 +389,6 @@ async fn request_handler(
                 .await
                 .unwrap();
             let chain_info = ipfs_client
-
                 .files_read(&format!("/new-{}/app/chain-info.json", random_number))
                 .map_ok(|chunk| chunk.to_vec())
                 .try_concat()
@@ -690,42 +689,44 @@ async fn request_handler(
             }
         }
 
-        (Method::POST, ["subscribe_to_callbacks", genesis_block_cid]) if request.method() == Method::POST => {
+        (Method::POST, ["subscribe_to_callbacks", genesis_block_cid])
+            if request.method() == Method::POST =>
+        {
             let body_bytes = hyper::body::to_bytes(request.into_body()).await.unwrap();
             let callback_url = String::from_utf8(body_bytes.to_vec()).unwrap();
-    
             let connection = Connection::open("block_callbacks.db").unwrap();
             let mut statement = connection
                 .prepare("INSERT INTO callback_subscriptions (genesis_block_cid, url_callback) VALUES (?, ?)").unwrap();
             statement.bind(1, genesis_block_cid.as_bytes()).unwrap();
             statement.bind(2, &callback_url).unwrap();
             statement.next().unwrap();
-    
+
             let response = Response::builder()
                 .status(StatusCode::OK)
-                .body(Body::from(r#"{"message": "Subscribed successfully"}"#)).unwrap();
+                .body(Body::from(r#"{"message": "Subscribed successfully"}"#))
+                .unwrap();
             Ok(response)
         }
-    
         // Unsubscribe from callbacks
-        (Method::POST, ["unsubscribe_from_callbacks", genesis_block_cid]) if request.method() == Method::POST => {
+        (Method::POST, ["unsubscribe_from_callbacks", genesis_block_cid])
+            if request.method() == Method::POST =>
+        {
             let body_bytes = hyper::body::to_bytes(request.into_body()).await.unwrap();
             let callback_url = String::from_utf8(body_bytes.to_vec()).unwrap();
-    
             let connection = Connection::open("block_callbacks.db").unwrap();
             let mut statement = connection
-                .prepare("DELETE FROM callback_subscriptions WHERE genesis_block_cid = ? AND url_callback = ?").unwrap();
+                .prepare("DELETE FROM callback_subscriptions WHERE genesis_block_cid = ? AND url_callback = ?")
+                .unwrap();
             statement.bind(1, genesis_block_cid.as_bytes()).unwrap();
             statement.bind(2, &callback_url).unwrap();
             statement.next().unwrap();
-    
+
             let response = Response::builder()
                 .status(StatusCode::OK)
-                .body(Body::from(r#"{"message": "Unsubscribed successfully"}"#)).unwrap();
+                .body(Body::from(r#"{"message": "Unsubscribed successfully"}"#))
+                .unwrap();
             Ok(response)
         }
-    
-    
         _ => {
             let json_error = serde_json::json!({
                 "error": "Invalid request",
