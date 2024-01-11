@@ -341,9 +341,11 @@ async fn request_handler(
                     .body(Body::from(json_error))
                     .unwrap();
             }
-            let connection =
-                sqlite::Connection::open_thread_safe(format!("{}/{}", options.db_path, appchain))
-                    .unwrap();
+            let connection = sqlite::Connection::open_thread_safe(format!(
+                "{}/chains/{}",
+                options.db_path, appchain
+            ))
+            .unwrap();
             let mut statement = connection
                 .prepare("SELECT * FROM blocks ORDER BY height DESC LIMIT 1")
                 .unwrap();
@@ -472,9 +474,11 @@ async fn request_handler(
                     .body(Body::from(json_error))
                     .unwrap();
             }
-            let connection =
-                sqlite::Connection::open_thread_safe(format!("{}/{}", options.db_path, appchain))
-                    .unwrap();
+            let connection = sqlite::Connection::open_thread_safe(format!(
+                "{}/chains/{}",
+                options.db_path, appchain
+            ))
+            .unwrap();
             let mut statement = connection
                 .prepare("SELECT * FROM blocks WHERE height=?")
                 .unwrap();
@@ -731,7 +735,6 @@ async fn compute(
     {
         Ok(_) => {
             app_path = Some("/gov");
-            tracing::info!("deprecated behaviour: directory /app was moved to /gov/app");
         }
         Err(_) => {}
     };

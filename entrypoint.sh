@@ -79,6 +79,7 @@ if [ x$CELESTIA_TESTNET_SEQUENCER_URL = x ]; then
 fi
 
 mkdir -p /data/db
+mkdir -p /data/db/chains/
 mkdir -p /data/snapshot
 
 RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --espresso-testnet-sequencer-url $ESPRESSO_TESTNET_SEQUENCER_URL \
