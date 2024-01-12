@@ -81,6 +81,8 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
         .try_concat()
         .await
         .unwrap();
+
+    // enter subscription loop
     loop {
         {
             let connection = sqlite::Connection::open_thread_safe(format!(
