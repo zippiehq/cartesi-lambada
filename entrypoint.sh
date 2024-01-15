@@ -71,7 +71,7 @@ if [ ! -e /data/base-machines/lambada-base-machine ]; then
 fi
 
 if [ x$ESPRESSO_TESTNET_SEQUENCER_URL = x ]; then
-   ESPRESSO_TESTNET_SEQUENCER_URL=https://espresso.tspre.org
+   ESPRESSO_TESTNET_SEQUENCER_URL=https://query.gibraltar.aws.espresso.network
 fi
 
 if [ x$CELESTIA_TESTNET_SEQUENCER_URL = x ]; then
