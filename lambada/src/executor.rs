@@ -1,4 +1,5 @@
-use sequencer::{L1BlockInfo, VmId};
+use sha2::Digest;
+use sha2::Sha256;
 use surf_disco::Url;
 use tide_disco::error::ServerError;
 
@@ -15,8 +16,10 @@ use hotshot_query_service::availability::BlockQueryData;
 use hyper::Request;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use jf_primitives::merkle_tree::namespaced_merkle_tree::NamespaceProof;
-use sequencer::SeqTypes;
+use sequencer::{SeqTypes, VmId};
+
 use sqlite::State;
+use std::collections::HashMap;
 use std::{
     sync::{Arc, Mutex},
     time::SystemTime,
@@ -289,7 +292,7 @@ async fn handle_tx(
     opt: ExecutorOptions,
     data: Option<Vec<u8>>,
     current_cid: &mut Cid,
-    block_info: &L1BlockInfo,
+    metadata: HashMap<Vec<u8>, Vec<u8>>,
     height: u64,
     genesis_cid_text: String,
     app_path: Option<&str>,
@@ -305,7 +308,7 @@ async fn handle_tx(
         opt.ipfs_write_url.as_str(),
         data,
         current_cid.clone(),
-        block_info,
+        metadata,
         None,
         app_path,
     )
@@ -410,14 +413,31 @@ async fn subscribe_espresso(
                 let proof = payload.get_namespace_proof(VmId::from(chain_vm_id));
                 let transactions = proof.get_namespace_leaves();
 
-                let mut block_info: L1BlockInfo = L1BlockInfo {
-                    number: 0,
-                    timestamp: U256([0; 4]),
-                    hash: H256([0; 32]),
-                };
+                let mut metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::<Vec<u8>, Vec<u8>>::new();
+                metadata.insert(
+                    calculate_sha256("sequencer".as_bytes()),
+                    calculate_sha256("espresso".as_bytes()),
+                );
+                metadata.insert(
+                    calculate_sha256("espresso-block-height".as_bytes()),
+                    block.height().to_be_bytes().to_vec(),
+                );
 
                 if let Some(info) = block.header().l1_finalized {
-                    block_info = info;
+                    metadata.insert(
+                        calculate_sha256("espresso-l1-block-height".as_bytes()),
+                        info.number.to_be_bytes().to_vec(),
+                    );
+                    let mut block_timestamp = vec![0; 32];
+                    info.timestamp.to_big_endian(&mut block_timestamp);
+                    metadata.insert(
+                        calculate_sha256("espresso-l1-block-timestamp".as_bytes()),
+                        block_timestamp,
+                    );
+                    metadata.insert(
+                        calculate_sha256("espresso-l1-block-hash".as_bytes()),
+                        info.hash.as_bytes().to_vec(),
+                    );
                 }
 
                 let height = block.height();
@@ -446,7 +466,7 @@ async fn subscribe_espresso(
                                 opt.clone(),
                                 Some(tx.payload().to_vec()),
                                 current_cid,
-                                &block_info,
+                                metadata.clone(),
                                 height,
                                 genesis_cid_text.clone(),
                                 app_path,
@@ -501,11 +521,7 @@ async fn subscribe_celestia(
                 {
                     break;
                 }
-                let block_info: &L1BlockInfo = &L1BlockInfo {
-                    number: 0,
-                    timestamp: U256([0; 4]),
-                    hash: H256([0; 32]),
-                };
+
                 match client
                     .blob_get_all(
                         state.height,
@@ -527,6 +543,19 @@ async fn subscribe_celestia(
                         if chain_info_path.eq("/gov") {
                             app_path = Some(chain_info_path);
                         }
+                        let mut metadata: HashMap<Vec<u8>, Vec<u8>> =
+                            HashMap::<Vec<u8>, Vec<u8>>::new();
+
+                        metadata.insert(
+                            calculate_sha256("sequencer".as_bytes()),
+                            calculate_sha256("celestia".as_bytes()),
+                        );
+
+                        metadata.insert(
+                            calculate_sha256("celestia-block-height".as_bytes()),
+                            state.height.to_be_bytes().to_vec(),
+                        );
+
                         if let Ok(statement_state) = statement.next() {
                             // We've not processed this block before, so let's process it (can we even end here since we set starting point?)
                             if statement_state == State::Done {
@@ -537,7 +566,7 @@ async fn subscribe_celestia(
                                         opt.clone(),
                                         Some(blob.data),
                                         current_cid,
-                                        block_info,
+                                        metadata.clone(),
                                         state.height,
                                         genesis_cid_text.clone(),
                                         app_path,
@@ -556,4 +585,10 @@ async fn subscribe_celestia(
             tracing::info!("Error: {:?}", e);
         }
     }
+}
+
+pub fn calculate_sha256(input: &[u8]) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(input);
+    hasher.finalize().to_vec()
 }
