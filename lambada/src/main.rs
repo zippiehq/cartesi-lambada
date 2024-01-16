@@ -27,6 +27,12 @@ use std::io::Cursor;
 use std::sync::Arc;
 use std::thread;
 
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct BincodedCompute {
+    metadata: HashMap<Vec<u8>, Vec<u8>>,
+    payload: Vec<u8>,
+}
+
 async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
     let executor_options = ExecutorOptions {
         espresso_testnet_sequencer_url: options.espresso_testnet_sequencer_url.clone(),
@@ -131,11 +137,19 @@ async fn request_handler(
                     "application/octet-stream",
                 ))
             {
+                let mut metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::<Vec<u8>, Vec<u8>>::new();
+
+                metadata.insert(
+                    calculate_sha256("sequencer".as_bytes()),
+                    calculate_sha256("compute".as_bytes()),
+                );
+
                 let data = hyper::body::to_bytes(request.into_body())
                     .await
                     .unwrap()
                     .to_vec();
-                match compute(Some(data), options.clone(), cid.to_string(), None).await {
+
+                match compute(Some(data), options.clone(), cid.to_string(), None, metadata).await {
                     Ok(cid) => {
                         let json_response = serde_json::json!({
                             "cid": Cid::try_from(cid).unwrap().to_string(),
@@ -175,6 +189,15 @@ async fn request_handler(
                 Err("Callback parameter wasn't set".to_string());
             let mut max_cycles: Option<u64> = None;
             let mut only_warmup: bool = false;
+            let mut bincoded: bool = false;
+
+            // replaced with bincoded metadata if available
+            let mut metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::<Vec<u8>, Vec<u8>>::new();
+
+            metadata.insert(
+                calculate_sha256("sequencer".as_bytes()),
+                calculate_sha256("compute".as_bytes()),
+            );
 
             for query in parsed_query {
                 if query.0.eq("callback") {
@@ -224,6 +247,24 @@ async fn request_handler(
                         }
                     };
                 }
+                if query.0.eq("bincoded") {
+                    match query.1.parse::<bool>() {
+                        Ok(bincoded_opt) => {
+                            bincoded = bincoded_opt;
+                        }
+                        Err(e) => {
+                            tracing::info!("bincoded should be boolean type");
+                            let json_error = serde_json::json!({
+                                "error": e.to_string(),
+                            });
+                            let json_error = serde_json::to_string(&json_error).unwrap();
+                            return Response::builder()
+                                .status(StatusCode::BAD_REQUEST)
+                                .body(Body::from(json_error))
+                                .unwrap();
+                        }
+                    };
+                }
             }
             let callback_uri = match callback_uri {
                 Ok(uri) => Arc::new(uri),
@@ -250,17 +291,34 @@ async fn request_handler(
                     .unwrap();
             }
             let mut data = None;
-            if !only_warmup {
+
+            if !only_warmup && !bincoded {
                 data = Some(
                     hyper::body::to_bytes(request.into_body())
                         .await
                         .unwrap()
                         .to_vec(),
                 );
+            } else if bincoded {
+                let real_data = hyper::body::to_bytes(request.into_body())
+                    .await
+                    .unwrap()
+                    .to_vec();
+                let bincoded_data: BincodedCompute = bincode::deserialize(&real_data).unwrap();
+                data = Some(bincoded_data.payload);
+                metadata = bincoded_data.metadata;
             }
+
             thread::spawn(move || {
                 let _ = task::block_on(async {
-                    match compute(data.clone(), options.clone(), cid.to_string(), max_cycles).await
+                    match compute(
+                        data.clone(),
+                        options.clone(),
+                        cid.to_string(),
+                        max_cycles,
+                        metadata.clone(),
+                    )
+                    .await
                     {
                         Ok(resulted_cid) => {
                             send_callback(
@@ -268,6 +326,7 @@ async fn request_handler(
                                 CallbackData::ComputeOutput(resulted_cid.to_string()),
                                 cid.to_string(),
                                 callback_uri,
+                                metadata.clone(),
                             )
                             .await
                         }
@@ -277,6 +336,7 @@ async fn request_handler(
                                 CallbackData::Error(e.to_string()),
                                 cid.to_string(),
                                 callback_uri,
+                                metadata.clone(),
                             )
                             .await
                         }
@@ -531,6 +591,7 @@ async fn request_handler(
             {
                 let ipfs_client = IpfsClient::from_str(&options.ipfs_url).unwrap();
 
+                // XXX suppport /gov/chain-info.json
                 let chain_info = ipfs_client
                     .cat(&(appchain.to_string() + "/app/chain-info.json"))
                     .map_ok(|chunk| chunk.to_vec())
@@ -672,7 +733,7 @@ async fn request_handler(
                     }
                     _ => {
                         let json_error = serde_json::json!({
-                            "error": "runknown sequencer type",
+                            "error": "unknown sequencer type",
                         });
                         let json_error = serde_json::to_string(&json_error).unwrap();
                         return Response::builder()
@@ -710,6 +771,7 @@ async fn compute(
     options: Arc<lambada::Options>,
     cid: String,
     max_cycles: Option<u64>,
+    metadata: HashMap<Vec<u8>, Vec<u8>>,
 ) -> Result<Cid, std::io::Error> {
     let cartesi_machine_url = options.cartesi_machine_url.clone();
     let ipfs_url = options.ipfs_url.as_str();
@@ -744,11 +806,6 @@ async fn compute(
         Err(_e) => {}
     }
 
-    let mut metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::<Vec<u8>, Vec<u8>>::new();
-    metadata.insert(
-        calculate_sha256("sequencer".as_bytes()),
-        calculate_sha256("compute".as_bytes()),
-    );
     execute(
         forked_machine_url,
         cartesi_machine_path,
@@ -768,6 +825,7 @@ async fn send_callback(
     callback_data: CallbackData,
     cid: String,
     callback_uri: Arc<Uri>,
+    metadata: HashMap<Vec<u8>, Vec<u8>>,
 ) -> hyper::Response<Body> {
     let mut data = serde_json::Value::Null;
     let body = body.unwrap_or_default();
@@ -777,6 +835,7 @@ async fn send_callback(
                 "output": resulted_cid,
                 "hash": sha256::digest(body),
                 "state_cid": cid,
+                "metadata": metadata,
             });
         }
         CallbackData::Error(error) => {
@@ -784,6 +843,7 @@ async fn send_callback(
                 "error": error.to_string(),
                 "hash": sha256::digest(body),
                 "state_cid": cid,
+                "metadata": metadata,
             });
         }
     }
