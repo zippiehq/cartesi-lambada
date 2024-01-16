@@ -723,16 +723,27 @@ async fn compute(
     let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
     let state_cid = Cid::try_from(cid.clone()).unwrap();
     let mut app_path = None;
-    let ipfs_client = IpfsClient::from_str(&options.ipfs_url).unwrap();
-    match ipfs_client
-        .files_stat(&format!("/{}{}", cid, "/gov/chain-info.json"))
-        .await
-    {
-        Ok(_) => {
-            app_path = Some("/gov");
+
+    let client = hyper::Client::new();
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "{}/api/v0/dag/resolve?arg={}/gov/chain-info.json",
+            ipfs_url,
+            state_cid.to_string()
+        ))
+        .body(hyper::Body::empty())
+        .unwrap();
+
+    match client.request(req).await {
+        Ok(res) => {
+            if res.status().is_success() {
+                app_path = Some("/gov");
+            }
         }
-        Err(_) => {}
-    };
+        Err(_e) => {}
+    }
+
     let mut metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::<Vec<u8>, Vec<u8>>::new();
     metadata.insert(
         calculate_sha256("sequencer".as_bytes()),
