@@ -4983,6 +4983,7 @@ dependencies = [
  "sequencer",
  "serde",
  "serde_json",
+ "sha2 0.10.8",
  "sha256",
  "sqlite",
  "surf-disco 0.4.4",

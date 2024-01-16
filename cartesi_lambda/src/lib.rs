@@ -7,12 +7,12 @@ use base64::Engine;
 use cartesi_machine_json_rpc::client::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
 use cid::Cid;
 use hyper::Request;
-use sequencer::L1BlockInfo;
 use serde_json::Value;
-use std::fs::File;
+use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::{thread, time::SystemTime};
+
 // How we communicate between host (this) and guest (the cartesi machine) is through read-writing the second flash drive
 // which is placed in memory at MACHINE_IO_ADDRESSS. Special care is needed on machine side to flush/ignore OS caches until PMEM/DAX comes around.
 //
@@ -49,8 +49,11 @@ const LOAD_APP: u64 = 0x00006;
 // make a hint that we're expecting certain IPFS hashes to be available (for example all hashes from ethereum block X), null-op in arbitration
 const HINT: u64 = 0x00007;
 
+// get metadata by 32-byte hash
+const GET_METADATA: u64 = 0x00008;
+
 // execute is the entry point for the computation to be done, we have a particular state CID with it's associated /app directory
-// and a transaction payload + block_info and we want to do this computation and get the new state CID back or an error
+// and a transaction payload + metadata and we want to do this computation and get the new state CID back or an error
 pub async fn execute(
     machine_url: String,
     cartesi_machine_path: &str,
@@ -58,7 +61,7 @@ pub async fn execute(
     ipfs_write_url: &str,
     payload: Option<Vec<u8>>,
     state_cid: Cid,
-    block_info: &L1BlockInfo,
+    metadata: HashMap<Vec<u8>, Vec<u8>>,
     max_cycles_input: Option<u64>,
     app_path: Option<&str>,
 ) -> Result<Cid, std::io::Error> {
@@ -76,7 +79,7 @@ pub async fn execute(
         .body(hyper::Body::empty())
         .unwrap();
 
-    let mut app_cid = String::new();
+    let mut app_cid;
     let client = hyper::Client::new();
 
     match client.request(req).await {
@@ -396,42 +399,6 @@ pub async fn execute(
                     .await
                     .unwrap();
 
-                let block_number = block_info.number.to_be_bytes();
-
-                machine
-                    .write_memory(
-                        MACHINE_IO_ADDRESSS + 24 + cid_length + payload_length,
-                        STANDARD.encode(block_number.to_vec()),
-                    )
-                    .await
-                    .unwrap();
-
-                let mut block_timestamp = vec![0; 32];
-
-                block_info.timestamp.to_big_endian(&mut block_timestamp);
-
-                machine
-                    .write_memory(
-                        MACHINE_IO_ADDRESSS + 32 + cid_length + payload_length,
-                        STANDARD.encode(block_timestamp.to_vec()),
-                    )
-                    .await
-                    .unwrap();
-
-                let hash = block_info.hash.0;
-
-                machine
-                    .write_memory(
-                        MACHINE_IO_ADDRESSS
-                            + 32
-                            + block_timestamp.len() as u64
-                            + cid_length
-                            + payload_length,
-                        STANDARD.encode(hash.to_vec()),
-                    )
-                    .await
-                    .unwrap();
-
                 tracing::info!("load_tx info was written");
             }
             // FINISH: The guest has finished execution and reported back a status code, accept or rejection of the transaction.
@@ -610,6 +577,51 @@ pub async fn execute(
                         .unwrap(),
                 );
                 tracing::info!("hint payload {:?}", payload);
+            }
+            // Handles the GET_METADATA action:
+            // 1. Reads a 64-bit value from the specified memory address (MACHINE_IO_ADDRESSS + 8) and converts it from big-endian to a u64, representing the length of a metadata key
+            // 2. Reads the metadata key of the specified length from memory starting at MACHINE_IO_ADDRESSS + 16
+            // 3. Fetches the metadata associated with the key
+            // 4. Writes the retrieved metadata back into the machine's memory at MACHINE_IO_ADDRESSS + 16, encoding using the STANDARD base64 (due to jsonrpc).
+            // 5. Writes the length of the metadata as a big-endian byte array into the machine's memory at MACHINE_IO_ADDRESSS, also using the STANDARD encoding.
+            //
+            // Unavailable metadata should kill the machine, data requested by machine is assumed to be available.
+            GET_METADATA => {
+                tracing::info!("GET_METADATA");
+                let length = u64::from_be_bytes(
+                    machine
+                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
+                        .await
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                );
+
+                let metadata_key = machine
+                    .read_memory(MACHINE_IO_ADDRESSS + 16, length)
+                    .await
+                    .unwrap();
+
+                tracing::info!("read metadata: {:?}", hex::encode(metadata_key.clone()));
+
+                let metadata_result = metadata.get(&metadata_key).unwrap(); // handle this a bit better
+                tracing::info!("metadata len {:?}", metadata_result.len());
+
+                machine
+                    .write_memory(
+                        MACHINE_IO_ADDRESSS + 16,
+                        STANDARD.encode(metadata_result.clone()),
+                    )
+                    .await
+                    .unwrap();
+                machine
+                    .write_memory(
+                        MACHINE_IO_ADDRESSS,
+                        STANDARD.encode(metadata_result.len().to_be_bytes().to_vec()),
+                    )
+                    .await
+                    .unwrap();
+                tracing::info!("metadata info was written");
             }
             _ => {
                 // XXX this should be a fatal error

@@ -16,10 +16,9 @@ use hyper::{header, Body, Client, HeaderMap, Method, Request, Response, Server};
 use hyper::{StatusCode, Uri};
 use hyper_tls::HttpsConnector;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
-use lambada::executor::{subscribe, ExecutorOptions};
+use lambada::executor::{calculate_sha256, subscribe, ExecutorOptions};
 use lambada::Options;
 use rand::Rng;
-use sequencer::L1BlockInfo;
 use serde::{Deserialize, Serialize};
 use sqlite::State;
 use std::collections::HashMap;
@@ -27,6 +26,7 @@ use std::convert::Infallible;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::thread;
+
 async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
     let executor_options = ExecutorOptions {
         espresso_testnet_sequencer_url: options.espresso_testnet_sequencer_url.clone(),
@@ -722,11 +722,6 @@ async fn compute(
         .unwrap();
     let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
     let state_cid = Cid::try_from(cid.clone()).unwrap();
-    let block_info: &L1BlockInfo = &L1BlockInfo {
-        number: 0,
-        timestamp: U256([0; 4]),
-        hash: H256([0; 32]),
-    };
     let mut app_path = None;
     let ipfs_client = IpfsClient::from_str(&options.ipfs_url).unwrap();
     match ipfs_client
@@ -738,6 +733,11 @@ async fn compute(
         }
         Err(_) => {}
     };
+    let mut metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::<Vec<u8>, Vec<u8>>::new();
+    metadata.insert(
+        calculate_sha256("sequencer".as_bytes()),
+        calculate_sha256("compute".as_bytes()),
+    );
     execute(
         forked_machine_url,
         cartesi_machine_path,
@@ -745,7 +745,7 @@ async fn compute(
         ipfs_write_url,
         data,
         state_cid,
-        block_info,
+        metadata,
         max_cycles,
         app_path,
     )
