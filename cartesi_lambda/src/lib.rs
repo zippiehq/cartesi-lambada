@@ -63,7 +63,6 @@ pub async fn execute(
     state_cid: Cid,
     metadata: HashMap<Vec<u8>, Vec<u8>>,
     max_cycles_input: Option<u64>,
-    app_path: Option<&str>,
 ) -> Result<Cid, std::io::Error> {
     tracing::info!("state cid {:?}", state_cid.to_string());
 
@@ -71,10 +70,9 @@ pub async fn execute(
     let req = Request::builder()
         .method("POST")
         .uri(format!(
-            "{}/api/v0/dag/resolve?arg={}{}/app",
+            "{}/api/v0/dag/resolve?arg={}/gov/app",
             ipfs_url,
-            state_cid.to_string(),
-            app_path.unwrap_or_default()
+            state_cid.to_string()
         ))
         .body(hyper::Body::empty())
         .unwrap();
