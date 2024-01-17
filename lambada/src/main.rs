@@ -11,6 +11,7 @@ use cid::Cid;
 use clap::Parser;
 use ethers::prelude::*;
 use futures::TryStreamExt;
+use hyper::body::to_bytes;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{header, Body, Client, HeaderMap, Method, Request, Response, Server};
 use hyper::{StatusCode, Uri};
@@ -57,6 +58,34 @@ async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
         });
         tracing::info!("out of thread");
     });
+}
+
+async fn get_attestation<T: AsRef<[u8]>>(user_data: T) -> Vec<u8> {
+    let https = HttpsConnector::new();
+    let client = Client::builder().build::<_, hyper::Body>(https);
+
+    let uri = "http://localhost:7777/v1/attestation".parse().unwrap();
+
+    let req_data = AttestationUserData {
+        user_data: base64::encode(user_data),
+    };
+
+    let mut req = Request::new(Body::from(serde_json::json!(req_data).to_string()));
+
+    *req.uri_mut() = uri;
+    *req.method_mut() = Method::POST;
+
+    let response = client.request(req).await.unwrap();
+    to_bytes(response.into_body()).await.unwrap().to_vec()
+}
+#[derive(Debug, Serialize, Deserialize)]
+struct AttestationUserData {
+    user_data: String,
+}
+#[derive(Debug, Serialize, Deserialize)]
+struct AttestationResponse {
+    data: String,
+    attestation_doc: String,
 }
 
 #[async_std::main]
@@ -717,7 +746,7 @@ async fn send_callback(
     cid: String,
     callback_uri: Arc<Uri>,
     metadata: HashMap<Vec<u8>, Vec<u8>>,
-) -> hyper::Response<Body> {
+) {
     let mut data = serde_json::Value::Null;
     let body = body.unwrap_or_default();
     match callback_data {
@@ -739,7 +768,26 @@ async fn send_callback(
         }
     }
 
-    let json_data = serde_json::to_string(&data).unwrap();
+    let mut json_data = serde_json::to_string(&data).unwrap();
+    match std::env::var("PROVIDE_NITRO_ATTESTATION") {
+        Ok(provide_nitro_attestation) => {
+            if provide_nitro_attestation.parse().unwrap() {
+                let data = hyper::body::to_bytes(json_data.clone())
+                    .await
+                    .expect("invalid cid response from callback")
+                    .to_vec();
+
+                let attestation_doc = get_attestation(data.clone()).await;
+                let result = AttestationResponse {
+                    data: hex::encode(data),
+                    attestation_doc: hex::encode(attestation_doc),
+                };
+                json_data = serde_json::to_string(&result).unwrap();
+            }
+        }
+        Err(_) => {}
+    };
+
     let mut req = Request::new(Body::from(json_data.clone()));
     *req.uri_mut() = callback_uri.as_ref().clone();
     let mut map = HeaderMap::new();
@@ -750,22 +798,13 @@ async fn send_callback(
     let client = Client::builder().build::<_, hyper::Body>(https);
 
     match client.request(req).await {
-        Ok(response) => {
-            return response;
-        }
+        Ok(_) => {}
         Err(e) => {
             tracing::info!("{}", e.to_string());
-            let json_error = serde_json::json!({
-                "error": e.to_string(),
-            });
-            let json_error = serde_json::to_string(&json_error).unwrap();
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::from(json_error))
-                .unwrap();
         }
     };
 }
+
 #[derive(Serialize, Deserialize)]
 struct Data {
     vm: u64,
