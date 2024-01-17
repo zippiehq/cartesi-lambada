@@ -76,7 +76,10 @@ async fn main() {
             sqlite::Connection::open_thread_safe(format!("{}/subscriptions.db", context.db_path))
                 .unwrap();
         let query = "
-            CREATE TABLE IF NOT EXISTS subscriptions (appchain_cid BLOB(48) NOT NULL);";
+            CREATE TABLE IF NOT EXISTS subscriptions (appchain_cid BLOB(48) NOT NULL);
+            CREATE TABLE IF NOT EXISTS block_callbacks (
+                genesis_block_cid BLOB NOT NULL,
+                callback_url TEXT NOT NULL";
         connection.execute(query).unwrap();
 
         let mut statement = connection.prepare("SELECT * FROM subscriptions").unwrap();
@@ -181,6 +184,40 @@ async fn request_handler(
                     .body(Body::from(json_error))
                     .unwrap();
             }
+        }
+        (Method::POST, ["subscribe_to_callbacks", genesis_block_cid]) => {
+            let body_bytes = hyper::body::to_bytes(request.into_body()).await.unwrap();
+            let callback_url = String::from_utf8(body_bytes.to_vec()).unwrap();
+            let connection = sqlite::Connection::open_thread_safe(format!(
+                "{}/subscriptions.db",
+                options.db_path
+            ))
+            .unwrap();
+            let mut statement = connection
+                .prepare(
+                    "INSERT INTO block_callbacks (genesis_block_cid, callback_url) VALUES (?, ?)",
+                )
+                .unwrap();
+            statement.bind((1, *genesis_block_cid)).unwrap();
+            statement.bind((2, callback_url.as_str()));
+            statement.next().unwrap();
+
+            Response::new(Body::from("Subscribed successfully"))
+        }
+
+        (Method::DELETE, ["unsubscribe_from_callbacks", genesis_block_cid]) => {
+            let connection = sqlite::Connection::open_thread_safe(format!(
+                "{}/subscriptions.db",
+                options.db_path
+            ))
+            .unwrap();
+            let mut statement = connection
+                .prepare("DELETE FROM block_callbacks WHERE genesis_block_cid = ?")
+                .unwrap();
+            statement.bind((1, *genesis_block_cid)).unwrap();
+            statement.next().unwrap();
+
+            Response::new(Body::from("Unsubscribed successfully"))
         }
         (hyper::Method::POST, ["compute_with_callback", cid]) => {
             let cid = Arc::new(cid.to_string());
@@ -678,7 +715,6 @@ async fn request_handler(
         }
     }
 }
-
 async fn compute(
     data: Option<Vec<u8>>,
     options: Arc<lambada::Options>,

@@ -13,13 +13,14 @@ use cid::Cid;
 use ethers::prelude::*;
 use futures_util::TryStreamExt;
 use hotshot_query_service::availability::BlockQueryData;
-use hyper::Request;
+use hyper::{header, Body, Client, HeaderMap, Method, Request, Response, Server};
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use jf_primitives::merkle_tree::namespaced_merkle_tree::NamespaceProof;
 use sequencer::{SeqTypes, VmId};
 
 use sqlite::State;
 use std::collections::HashMap;
+use std::thread;
 use std::{
     sync::{Arc, Mutex},
     time::SystemTime,
@@ -255,6 +256,40 @@ async fn get_chain_info_cid(opt: &ExecutorOptions, current_cid: Cid) -> Option<C
     }
 }
 
+async fn trigger_callback_for_newblock(
+    options: Arc<ExecutorOptions>,
+    genesis_block_cid: &str,
+    block_height: u64,
+    state_cid: &str,
+) {
+    let connection =
+        sqlite::Connection::open_thread_safe(format!("{}/subscriptions.db", options.db_path))
+            .unwrap();
+    let mut statement = connection
+        .prepare("SELECT callback_url FROM block_callbacks WHERE genesis_block_cid = ?")
+        .unwrap();
+    statement.bind((1, genesis_block_cid)).unwrap();
+
+    while let Ok(State::Row) = statement.next() {
+        let callback_url = statement.read::<String, _>(0).unwrap();
+        let payload = serde_json::json!({
+            "appchain": genesis_block_cid,
+            "block_height": block_height,
+            "state_cid": state_cid
+        });
+
+        let client = Client::new();
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(callback_url)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+
+        let _ = client.request(req).await;
+    }
+}
+
 async fn handle_tx(
     machine: &JsonRpcCartesiMachineClient,
     opt: ExecutorOptions,
@@ -288,6 +323,7 @@ async fn handle_tx(
             .unwrap()
             .as_millis()
     );
+
     if let Ok(cid) = result {
         tracing::info!(
             "old current_cid {:?}",
@@ -432,6 +468,25 @@ async fn subscribe_espresso(
                             .await;
                         }
                     }
+
+                    let new_state_cid = current_cid.to_string();
+                    let new_block_height = height;
+
+                    let options_clone = Arc::new(opt.clone());
+                    let genesis_block_cid = genesis_cid_text.clone();
+
+                    thread::spawn(move || {
+                        let runtime = tokio::runtime::Runtime::new().unwrap();
+                        runtime.block_on(async {
+                            trigger_callback_for_newblock(
+                                options_clone,
+                                &genesis_block_cid,
+                                new_block_height,
+                                &new_state_cid,
+                            )
+                            .await;
+                        });
+                    });
                 }
             }
             Err(err) => {
@@ -440,7 +495,6 @@ async fn subscribe_espresso(
             }
         };
     }
-    tracing::info!("finished");
 }
 async fn subscribe_celestia(
     machine: &JsonRpcCartesiMachineClient,
@@ -524,6 +578,25 @@ async fn subscribe_celestia(
                                     .await;
                                 }
                             }
+
+                            let new_state_cid = current_cid.to_string();
+                            let new_block_height = state.height;
+
+                            let options_clone = Arc::new(opt.clone());
+                            let genesis_block_cid = genesis_cid_text.clone();
+
+                            thread::spawn(move || {
+                                let runtime = tokio::runtime::Runtime::new().unwrap();
+                                runtime.block_on(async {
+                                    trigger_callback_for_newblock(
+                                        options_clone,
+                                        &genesis_block_cid,
+                                        new_block_height,
+                                        &new_state_cid,
+                                    )
+                                    .await;
+                                });
+                            });
                         }
                     }
                     Err(_) => {}
