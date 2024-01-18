@@ -20,6 +20,7 @@ use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use lambada::executor::{calculate_sha256, subscribe, ExecutorOptions};
 use lambada::Options;
 use rand::Rng;
+use rs_car_ipfs::single_file::read_single_file_seek;
 use serde::{Deserialize, Serialize};
 use sqlite::State;
 use std::collections::HashMap;
@@ -27,7 +28,6 @@ use std::convert::Infallible;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::thread;
-
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 struct BincodedCompute {
     metadata: HashMap<Vec<u8>, Vec<u8>>,
@@ -705,6 +705,35 @@ async fn request_handler(
                 .body(Body::from(json_error))
                 .unwrap();
         }
+    }
+}
+
+async fn async_reading(ipfs_url: &str, state_cid: Cid, car_file_name: String, out_file_path: String) {
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "{}/api/v0/dag/resolve?arg={}/gov/app/{}",
+            ipfs_url,
+            state_cid.to_string(),
+            car_file_name
+        ))
+        .body(hyper::Body::empty())
+        .unwrap();
+    let client = hyper::Client::new();
+
+    match client.request(req).await {
+        Ok(res) => {
+            let mut f = res.into_body()
+            .map(|result| result.map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, "Error!")))
+            .into_async_read();
+
+            let mut out = async_std::fs::File::create(out_file_path)
+                .await
+                .unwrap();
+            let root_cid = rs_car::Cid::try_from(state_cid.to_bytes()).unwrap();
+            read_single_file_seek(&mut f, &mut out, Some(&root_cid)).await;
+        }
+        Err(_) => {}
     }
 }
 

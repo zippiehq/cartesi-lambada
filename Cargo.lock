@@ -1257,6 +1257,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "blake2b_simd"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23285ad32269793932e830392f2fe2f83e26488fd3ec778883a93c8323735780"
+dependencies = [
+ "arrayref",
+ "arrayvec",
+ "constant_time_eq 0.3.0",
+]
+
+[[package]]
 name = "blake3"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1310,7 +1321,7 @@ version = "0.1.0"
 source = "git+https://github.com/eigerco/lumina#129272e8d926b4c7badf27a26dea915323dd6489"
 dependencies = [
  "async-trait",
- "cid",
+ "cid 0.11.0",
  "dashmap",
  "multihash 0.19.1",
  "thiserror",
@@ -1445,7 +1456,7 @@ dependencies = [
  "async-std",
  "base64 0.21.7",
  "cartesi-machine-json-rpc",
- "cid",
+ "cid 0.11.0",
  "futures",
  "futures-util",
  "hex",
@@ -1505,7 +1516,7 @@ dependencies = [
  "blockstore",
  "bytes 1.5.0",
  "celestia-proto",
- "cid",
+ "cid 0.11.0",
  "const_format",
  "enum_dispatch",
  "libp2p-identity",
@@ -1562,6 +1573,19 @@ dependencies = [
  "num-traits",
  "serde",
  "windows-targets 0.48.5",
+]
+
+[[package]]
+name = "cid"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd94671561e36e4e7de75f753f577edafb0e7c05d6e4547229fdf7938fbcd2c3"
+dependencies = [
+ "core2",
+ "multibase",
+ "multihash 0.18.1",
+ "serde",
+ "unsigned-varint 0.7.2",
 ]
 
 [[package]]
@@ -4968,7 +4992,7 @@ dependencies = [
  "cartesi_lambda",
  "celestia-rpc",
  "celestia-types",
- "cid",
+ "cid 0.11.0",
  "clap",
  "contract-bindings",
  "ethers",
@@ -4981,11 +5005,14 @@ dependencies = [
  "ipfs-api-backend-hyper",
  "jf-primitives",
  "rand 0.8.5",
+ "rs-car",
+ "rs-car-ipfs",
  "sequencer",
  "serde",
  "serde_json",
  "sha2 0.10.8",
  "sha256",
+ "sluice",
  "sqlite",
  "surf-disco 0.4.4",
  "tide-disco 0.4.4",
@@ -5004,6 +5031,55 @@ name = "libc"
 version = "0.2.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "302d7ab3130588088d277783b1e2d2e10c9e9e4a16dd9050e6ec93fb3e7048f4"
+
+[[package]]
+name = "libipld"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1ccd6b8ffb3afee7081fcaec00e1b099fd1c7ccf35ba5729d88538fcc3b4599"
+dependencies = [
+ "fnv",
+ "libipld-cbor",
+ "libipld-core",
+ "libipld-macro",
+ "log",
+ "multihash 0.18.1",
+ "thiserror",
+]
+
+[[package]]
+name = "libipld-cbor"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77d98c9d1747aa5eef1cf099cd648c3fd2d235249f5fed07522aaebc348e423b"
+dependencies = [
+ "byteorder",
+ "libipld-core",
+ "thiserror",
+]
+
+[[package]]
+name = "libipld-core"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5acd707e8d8b092e967b2af978ed84709eaded82b75effe6cb6f6cc797ef8158"
+dependencies = [
+ "anyhow",
+ "cid 0.10.1",
+ "core2",
+ "multibase",
+ "multihash 0.18.1",
+ "thiserror",
+]
+
+[[package]]
+name = "libipld-macro"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71171c54214f866ae6722f3027f81dff0931e600e5a61e6b1b6a49ca0b5ed4ae"
+dependencies = [
+ "libipld-core",
+]
 
 [[package]]
 name = "libm"
@@ -6069,6 +6145,17 @@ name = "multihash"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "835d6ff01d610179fbce3de1694d007e500bf33a7f29689838941d6bf783ae40"
+dependencies = [
+ "core2",
+ "multihash-derive",
+ "unsigned-varint 0.7.2",
+]
+
+[[package]]
+name = "multihash"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfd8a792c1694c6da4f68db0a9d707c72bd260994da179e6030a5dcee00bb815"
 dependencies = [
  "core2",
  "multihash-derive",
@@ -7644,6 +7731,29 @@ checksum = "94f8f99b10dedd317514253dda1fa7c14e344aac96e1f78149a64879ce282aca"
 dependencies = [
  "smartcow",
  "smartstring",
+]
+
+[[package]]
+name = "rs-car"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf69c4017006c0101362b5df74ee230331703e9938f970468dc1e429afe12998"
+dependencies = [
+ "blake2b_simd",
+ "futures",
+ "libipld",
+ "sha2 0.10.8",
+]
+
+[[package]]
+name = "rs-car-ipfs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ced3977ca80da31daaf6a0530b0e4536eb704be5a5b8ed9de1368be43d44524"
+dependencies = [
+ "futures",
+ "quick-protobuf",
+ "rs-car",
 ]
 
 [[package]]
