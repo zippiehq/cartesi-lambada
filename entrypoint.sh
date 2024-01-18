@@ -1,4 +1,14 @@
 #!/bin/sh
+
+# XXX this probably does not work on remote cartesi machine and should be handled differently
+# also forked urls may need adjusting in the code
+if [ ! -e /data/base-machines/lambada-base-machine ]; then
+   echo "Unpacking base machine"
+   mkdir -p /data/base-machines
+   cd /data/base-machines
+   tar -zxvf /lambada-base-machine.tar.gz 
+   cd /
+fi
 if [ x$IPFS_URL = x ]; then
   echo "Running container-local IPFS instance"
   if [ ! -e /data/ipfs ]; then
@@ -35,7 +45,11 @@ if [ x$IPFS_URL = x ]; then
      ) &
   fi
   IPFS_PATH=/data/ipfs ipfs add --cid-version=1 -r /sample
+  IPFS_PATH=/data/ipfs ipfs add --cid-version=1 --raw-leaves=false -r /data/base-machines
 fi
+
+rm -rf /data/base-machines
+
 
 if [ -z "$IPFS_WRITE_URL" ]; then
   IPFS_WRITE_URL=$IPFS_URL
@@ -60,15 +74,6 @@ if [ x$CARTESI_MACHINE_URL = x ]; then
    CARTESI_MACHINE_URL=http://127.0.0.1:50051
 fi
 
-# XXX this probably does not work on remote cartesi machine and should be handled differently
-# also forked urls may need adjusting in the code
-if [ ! -e /data/base-machines/lambada-base-machine ]; then
-   echo "Unpacking base machine"
-   mkdir -p /data/base-machines
-   cd /data/base-machines
-   tar -zxvf /lambada-base-machine.tar.gz 
-   cd /
-fi
 
 if [ x$ESPRESSO_TESTNET_SEQUENCER_URL = x ]; then
    ESPRESSO_TESTNET_SEQUENCER_URL=https://query.gibraltar.aws.espresso.network

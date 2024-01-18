@@ -41,7 +41,6 @@ async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
         ipfs_url: options.ipfs_url.clone(),
         ipfs_write_url: options.ipfs_write_url.clone(),
         db_path: options.db_path.clone(),
-        base_cartesi_machine_path: options.machine_dir.clone(),
     };
     let cartesi_machine_url = options.cartesi_machine_url.to_string().clone();
 
@@ -755,8 +754,6 @@ async fn compute(
     let ipfs_url = options.ipfs_url.as_str();
     let ipfs_write_url = options.ipfs_write_url.as_str();
 
-    let cartesi_machine_path = options.machine_dir.as_str();
-
     let machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url.to_string())
         .await
         .unwrap();
@@ -765,7 +762,6 @@ async fn compute(
 
     execute(
         forked_machine_url,
-        cartesi_machine_path,
         ipfs_url,
         ipfs_write_url,
         data,

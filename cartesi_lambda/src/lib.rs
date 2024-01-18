@@ -1,3 +1,6 @@
+use async_std::stream::StreamExt;
+use futures::AsyncBufRead;
+use futures::AsyncReadExt;
 use futures::TryStreamExt;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 
@@ -7,6 +10,7 @@ use base64::Engine;
 use cartesi_machine_json_rpc::client::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
 use cid::Cid;
 use hyper::Request;
+use rs_car_ipfs::single_file::read_single_file_seek;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -56,7 +60,6 @@ const GET_METADATA: u64 = 0x00008;
 // and a transaction payload + metadata and we want to do this computation and get the new state CID back or an error
 pub async fn execute(
     machine_url: String,
-    cartesi_machine_path: &str,
     ipfs_url: &str,
     ipfs_write_url: &str,
     payload: Option<Vec<u8>>,
@@ -107,6 +110,26 @@ pub async fn execute(
 
     let read_client = IpfsClient::from_str(ipfs_url).unwrap();
     let write_client = IpfsClient::from_str(ipfs_write_url).unwrap();
+
+    let app_info_raw = read_client
+        .cat(&format!("{}/info.json", app_cid.to_string()))
+        .map_ok(|chunk| chunk.to_vec())
+        .try_concat()
+        .await
+        .unwrap();
+
+    let app_info = serde_json::from_slice::<serde_json::Value>(&app_info_raw).unwrap();
+    let base_image = String::from(
+        app_info
+            .clone()
+            .get("base_image_cid")
+            .unwrap()
+            .as_str()
+            .unwrap(),
+    );
+
+    let base_image_cid = Cid::try_from(base_image.clone()).unwrap();
+
     tracing::info!("execute");
 
     // connect to a Cartesi Machine - we expect this to be an forked, empty machine and we control when it's shut down
@@ -117,33 +140,38 @@ pub async fn execute(
 
     // TODO: we will have multiple base images in future
     if std::path::Path::new(&format!(
-        "/data/snapshot/base_{}",
+        "/data/snapshot/{}_{}",
+        base_image,
         Cid::try_from(app_cid.clone()).unwrap().to_string()
     ))
     .is_dir()
     {
         while std::path::Path::new(&format!(
-            "/data/snapshot/base_{}.lock",
+            "/data/snapshot/{}_{}.lock",
+            base_image,
             Cid::try_from(app_cid.clone()).unwrap().to_string()
         ))
         .exists()
         {
             tracing::info!(
-                "waiting for base_{}.lock",
+                "waiting for {}_{}.lock",
+                base_image,
                 Cid::try_from(app_cid.clone()).unwrap().to_string()
             );
             thread::sleep(std::time::Duration::from_millis(500));
         }
         // There is a snapshot of this base machine with this app initialized and waiting for a transaction (LOAD_TX)
         tracing::info!(
-            "loading machine from /data/snapshot/base_{}",
+            "loading machine from /data/snapshot/{}_{}",
+            base_image,
             Cid::try_from(app_cid.clone()).unwrap().to_string()
         );
         let before_load_machine = SystemTime::now();
         machine
             .load_machine(
                 &format!(
-                    "/data/snapshot/base_{}",
+                    "/data/snapshot/{}_{}",
+                    base_image,
                     Cid::try_from(app_cid.clone()).unwrap().to_string()
                 ),
                 &MachineRuntimeConfig {
@@ -163,16 +191,17 @@ pub async fn execute(
         );
 
         machine_loaded_state = 2;
-    } else if std::path::Path::new(&format!("/data/snapshot/base")).exists() {
+    } else if std::path::Path::new(&format!("/data/snapshot/{}_bootedup", base_image)).exists() {
         // There is a snapshot of this base machine initialized and waiting to be populated with an app that'll initialize (LOAD_APP)
-        while std::path::Path::new("/data/snapshot/base.lock").exists() {
-            tracing::info!("waiting for base.lock");
+        while std::path::Path::new(&format!("/data/snapshot/{}_bootedup.lock", base_image)).exists()
+        {
+            tracing::info!("waiting for {}_bootedup.lock", base_image);
             thread::sleep(std::time::Duration::from_millis(500));
         }
         let before_load_machine = SystemTime::now();
         machine
             .load_machine(
-                "/data/snapshot/base",
+                format!("/data/snapshot/{}_bootedup", base_image).as_str(),
                 &MachineRuntimeConfig {
                     skip_root_hash_check: true,
                     ..Default::default()
@@ -190,11 +219,16 @@ pub async fn execute(
         );
 
         machine_loaded_state = 1;
-    } else {
-        // We need to load the base machine and run it, snapshotting LOAD_APP and LOAD_TX stages
+    } else if std::path::Path::new(&format!("/data/snapshot/{}", base_image)).exists() {
+        // no sane snapshot for us, we need to start from start
+        while std::path::Path::new(&format!("/data/snapshot/{}.lock", base_image)).exists() {
+            tracing::info!("waiting for {}.lock", base_image);
+            thread::sleep(std::time::Duration::from_millis(500));
+        }
+        let before_load_machine = SystemTime::now();
         machine
             .load_machine(
-                cartesi_machine_path,
+                format!("/data/snapshot/{}", base_image).as_str(),
                 &MachineRuntimeConfig {
                     skip_root_hash_check: true,
                     ..Default::default()
@@ -202,6 +236,52 @@ pub async fn execute(
             )
             .await
             .unwrap();
+        let after_load_machine = SystemTime::now();
+        tracing::info!(
+            "It took {} milliseconds to load snapshot",
+            after_load_machine
+                .duration_since(before_load_machine)
+                .unwrap()
+                .as_millis()
+        );
+    } else {
+        tracing::info!("grabbing new base machine {}", base_image);
+        if std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(format!("/data/snapshot/{}.lock", base_image))
+            .is_ok()
+        {
+            dedup_download_directory(
+                ipfs_url,
+                base_image_cid,
+                format!("/data/snapshot/{}", base_image),
+            )
+            .await;
+            std::fs::remove_file(format!("/data/snapshot/{}.lock", base_image)).unwrap();
+            let before_load_machine = SystemTime::now();
+            // XXX we should really do root hash check at least on downloaded stuff that we've been pointed to?
+            // maybe a compute_with_callback flag that we can trust the machine? but need to be careful about derived snapshots then too?
+            machine
+                .load_machine(
+                    format!("/data/snapshot/{}", base_image).as_str(),
+                    &MachineRuntimeConfig {
+                        skip_root_hash_check: true,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            let after_load_machine = SystemTime::now();
+            tracing::info!(
+                "It took {} milliseconds to load snapshot",
+                after_load_machine
+                    .duration_since(before_load_machine)
+                    .unwrap()
+                    .as_millis()
+            );
+        }
     }
     let mut max_cycles = u64::MAX;
     if let Some(m_cycle) = max_cycles_input {
@@ -295,12 +375,14 @@ pub async fn execute(
             LOAD_TX => {
                 tracing::info!("LOAD_TX");
                 if !std::path::Path::new(&format!(
-                    "/data/snapshot/base_{}.lock",
+                    "/data/snapshot/{}_{}.lock",
+                    base_image.as_str(),
                     app_cid.clone().to_string()
                 ))
                 .exists()
                     && !std::path::Path::new(&format!(
-                        "/data/snapshot/base_{}",
+                        "/data/snapshot/{}_{}.lock",
+                        base_image.as_str(),
                         app_cid.clone().to_string()
                     ))
                     .exists()
@@ -311,7 +393,8 @@ pub async fn execute(
                         .write(true)
                         .create_new(true)
                         .open(format!(
-                            "/data/snapshot/base_{}.lock",
+                            "/data/snapshot/{}_{}.lock",
+                            base_image,
                             app_cid.clone().to_string()
                         ))
                         .is_ok()
@@ -319,6 +402,9 @@ pub async fn execute(
                         let arc_app_cid = Arc::new(app_cid.clone());
                         let forked_machine_url =
                             format!("http://{}", machine.fork().await.unwrap());
+
+                        let base_image = base_image.clone();
+
                         thread::spawn(move || {
                             let _ = task::block_on(async move {
                                 let forked_machine =
@@ -329,12 +415,17 @@ pub async fn execute(
                                     Cid::try_from(arc_app_cid.to_string()).unwrap();
                                 tracing::info!(
                                     "snapshot stage load tx to dir: {}",
-                                    format!("/data/snapshot/base_{}", app_cid.clone().to_string())
+                                    format!(
+                                        "/data/snapshot/{}_{}",
+                                        base_image,
+                                        app_cid.clone().to_string()
+                                    )
                                 );
 
                                 forked_machine
                                     .store(&format!(
-                                        "/data/snapshot/base_{}",
+                                        "/data/snapshot/{}_{}",
+                                        base_image,
                                         app_cid.clone().to_string(),
                                     ))
                                     .await
@@ -342,7 +433,8 @@ pub async fn execute(
                                 forked_machine.destroy().await.unwrap();
                                 forked_machine.shutdown().await.unwrap();
                                 std::fs::remove_file(format!(
-                                    "/data/snapshot/base_{}.lock",
+                                    "/data/snapshot/{}_{}.lock",
+                                    base_image,
                                     app_cid.clone().to_string()
                                 ))
                                 .unwrap();
@@ -491,19 +583,25 @@ pub async fn execute(
             LOAD_APP => {
                 tracing::info!("LOAD_APP");
 
-                if !std::path::Path::new("/data/snapshot/base").exists()
-                    && !std::path::Path::new("/data/snapshot/base.lock").exists()
+                if !std::path::Path::new(&format!("/data/snapshot/{}_bootedup", base_image))
+                    .exists()
+                    && !std::path::Path::new(&format!(
+                        "/data/snapshot/{}_bootedup.lock",
+                        base_image
+                    ))
+                    .exists()
                     && machine_loaded_state == 0
                 {
                     if std::fs::OpenOptions::new()
                         .read(true)
                         .write(true)
                         .create_new(true)
-                        .open("/data/snapshot/base.lock")
+                        .open(format!("/data/snapshot/{}_bootedup.lock", base_image))
                         .is_ok()
                     {
                         let forked_machine_url =
                             format!("http://{}", machine.fork().await.unwrap());
+                        let base_image = base_image.clone();
 
                         thread::spawn(move || {
                             let _ = task::block_on(async {
@@ -512,13 +610,21 @@ pub async fn execute(
                                         .await
                                         .unwrap();
                                 tracing::info!(
-                                    "snapshot stage load app to dir: /data/snapshot/base"
+                                    "snapshot stage load app to dir: /data/snapshot/{}",
+                                    format!("{}_bootedup", base_image)
                                 );
-                                forked_machine.store("/data/snapshot/base").await.unwrap();
+                                forked_machine
+                                    .store(&format!("/data/snapshot/{}_bootedup", base_image))
+                                    .await
+                                    .unwrap();
                                 forked_machine.destroy().await.unwrap();
                                 forked_machine.shutdown().await.unwrap();
-                                std::fs::remove_file("/data/snapshot/base.lock").unwrap();
-                                tracing::info!("done snapshotting base");
+                                std::fs::remove_file(format!(
+                                    "/data/snapshot/{}_bootedup.lock",
+                                    base_image
+                                ))
+                                .unwrap();
+                                tracing::info!("done snapshotting {}_bootedup", base_image);
                             });
                         });
                     } else {
@@ -647,5 +753,59 @@ pub async fn execute(
         }
         // After handling the operation, we clear the yield flag and loop back and continue execution of machine
         machine.reset_iflags_y().await.unwrap();
+    }
+}
+
+async fn dedup_download_directory(ipfs_url: &str, directory_cid: Cid, out_file_path: String) {
+    let ipfs_client = IpfsClient::from_str(ipfs_url).unwrap();
+    let res = ipfs_client
+        .ls(format!("/ipfs/{}", directory_cid.to_string()).as_str())
+        .await
+        .unwrap();
+    let first_object = res.objects.first().unwrap();
+
+    std::fs::create_dir_all(out_file_path.clone()).unwrap();
+
+    for val in &first_object.links {
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("{}/api/v0/dag/export?arg={}", ipfs_url, val.hash))
+            .body(hyper::Body::empty())
+            .unwrap();
+
+        let client = hyper::Client::new();
+
+        match client.request(req).await {
+            Ok(res) => {
+                let mut f = res
+                    .into_body()
+                    .map(|result| {
+                        result.map_err(|error| {
+                            std::io::Error::new(std::io::ErrorKind::Other, "Error!")
+                        })
+                    })
+                    .into_async_read();
+
+                let mut out = async_std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .open(format!("{}/{}", out_file_path, val.name.clone()))
+                    .await
+                    .unwrap();
+                let root_cid = rs_car::Cid::try_from(val.hash.clone()).unwrap();
+                tracing::info!(
+                    "storing file from CAR of {} into {}/{}",
+                    val.hash.clone(),
+                    out_file_path,
+                    val.name.clone()
+                );
+
+                read_single_file_seek(&mut f, &mut out, None).await.unwrap();
+            }
+            Err(er) => {
+                println!("{}", er.to_string());
+            }
+        }
     }
 }
