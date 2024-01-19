@@ -106,7 +106,6 @@ pub async fn execute(
     );
 
     let read_client = IpfsClient::from_str(ipfs_url).unwrap();
-    let write_client = IpfsClient::from_str(ipfs_write_url).unwrap();
     tracing::info!("execute");
 
     // connect to a Cartesi Machine - we expect this to be an forked, empty machine and we control when it's shut down
@@ -483,7 +482,13 @@ pub async fn execute(
                     .unwrap();
 
                 let data = Cursor::new(memory.clone());
-                let put_response = write_client.block_put(data).await.unwrap();
+                let ipfs_write_url: String = ipfs_write_url.to_string();
+                thread::spawn(move || {
+                    let _ = task::block_on(async move {
+                        let write_client = IpfsClient::from_str(ipfs_write_url.as_str()).unwrap();
+                        write_client.block_put(data).await.unwrap();
+                    });
+                });
             }
             // op LOAD_APP is a signal from the base image that it's ready to be told which app CID to attempt to initialize
             // This results in length of app CID (BE u64) and the CID itself being written into the flash drive
