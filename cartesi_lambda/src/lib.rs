@@ -11,8 +11,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::{thread, time::SystemTime};
-
 // How we communicate between host (this) and guest (the cartesi machine) is through read-writing the second flash drive
 // which is placed in memory at MACHINE_IO_ADDRESSS. Special care is needed on machine side to flush/ignore OS caches until PMEM/DAX comes around.
 //
@@ -206,6 +206,7 @@ pub async fn execute(
     if let Some(m_cycle) = max_cycles_input {
         max_cycles = m_cycle;
     }
+    let mut threads: Vec<JoinHandle<()>> = Vec::new();
     loop {
         let mut interpreter_break_reason = Value::Null;
         // Are we yielded? If not, continue machine execution
@@ -253,7 +254,6 @@ pub async fn execute(
                     .try_concat()
                     .await
                     .unwrap();
-                tracing::info!("block len {:?}", block.len());
 
                 machine
                     .write_memory(MACHINE_IO_ADDRESSS + 16, STANDARD.encode(block.clone()))
@@ -274,6 +274,11 @@ pub async fn execute(
             // 3. Returns an error of type `std::io::Error` with the kind `std::io::ErrorKind::Other`, indicating a general error, and a message "exception" to signify that an exception occurred.
             EXCEPTION => {
                 tracing::info!("HTIF_YIELD_REASON_TX_EXCEPTION");
+                for thread in threads {
+                    tracing::info!("wait for thread to finish");
+                    thread.join().unwrap();
+                    tracing::info!("thread fihished");
+                }
                 machine.destroy().await.unwrap();
                 machine.shutdown().await.unwrap();
                 return Err(std::io::Error::new(std::io::ErrorKind::Other, "exception"));
@@ -318,7 +323,7 @@ pub async fn execute(
                         let arc_app_cid = Arc::new(app_cid.clone());
                         let forked_machine_url =
                             format!("http://{}", machine.fork().await.unwrap());
-                        thread::spawn(move || {
+                        let base_snapshotting_thread = thread::spawn(move || {
                             let _ = task::block_on(async move {
                                 let forked_machine =
                                     JsonRpcCartesiMachineClient::new(forked_machine_url)
@@ -348,6 +353,7 @@ pub async fn execute(
                                 tracing::info!("done snapshotting app {}", app_cid.clone());
                             });
                         });
+                        threads.push(base_snapshotting_thread);
                     } else {
                         tracing::info!(
                             "did not manage to create lock, snapshot might already be in progress"
@@ -358,6 +364,11 @@ pub async fn execute(
                 }
                 if payload.is_none() {
                     tracing::info!("machine warmed up");
+                    for thread in threads {
+                        tracing::info!("wait for thread to finish");
+                        thread.join().unwrap();
+                        tracing::info!("thread fihished");
+                    }
                     machine.destroy().await.unwrap();
                     machine.shutdown().await.unwrap();
                     return Ok(Cid::default());
@@ -430,6 +441,11 @@ pub async fn execute(
                     0 => {
                         tracing::info!("HTIF_YIELD_REASON_RX_ACCEPTED");
                         println!("HTIF_YIELD_REASON_RX_ACCEPTED");
+                        for thread in threads {
+                            tracing::info!("wait for thread to finish");
+                            thread.join().unwrap();
+                            tracing::info!("thread fihished");
+                        }
                         machine.destroy().await.unwrap();
                         machine.shutdown().await.unwrap();
                         tracing::info!(
@@ -444,12 +460,22 @@ pub async fn execute(
                         println!("HTIF_YIELD_REASON_RX_REJECTED");
                         machine.destroy().await.unwrap();
                         machine.shutdown().await.unwrap();
+                        for thread in threads {
+                            tracing::info!("wait for thread to finish");
+                            thread.join().unwrap();
+                            tracing::info!("thread fihished");
+                        }
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::Other,
                             "transaction was rejected",
                         ));
                     }
                     _ => {
+                        for thread in threads {
+                            tracing::info!("wait for thread to finish");
+                            thread.join().unwrap();
+                            tracing::info!("thread fihished");
+                        }
                         machine.destroy().await.unwrap();
                         machine.shutdown().await.unwrap();
                         return Err(std::io::Error::new(
@@ -483,12 +509,24 @@ pub async fn execute(
 
                 let data = Cursor::new(memory.clone());
                 let ipfs_write_url: String = ipfs_write_url.to_string();
-                thread::spawn(move || {
+                let block_put_thread = thread::spawn(move || {
                     let _ = task::block_on(async move {
-                        let write_client = IpfsClient::from_str(ipfs_write_url.as_str()).unwrap();
-                        write_client.block_put(data).await.unwrap();
+                        tracing::info!("start block putting");
+                        match IpfsClient::from_str(ipfs_write_url.as_str()) {
+                            Ok(client) => {
+                                let write_client = client;
+                                if let Err(err) = write_client.block_put(data).await {
+                                    tracing::error!("Error putting block: {:?}", err);
+                                }
+                            }
+                            Err(err) => {
+                                tracing::error!("Error putting block: {:?}", err);
+                            }
+                        }
+                        tracing::info!("finish block putting");
                     });
                 });
+                threads.push(block_put_thread);
             }
             // op LOAD_APP is a signal from the base image that it's ready to be told which app CID to attempt to initialize
             // This results in length of app CID (BE u64) and the CID itself being written into the flash drive
@@ -510,8 +548,8 @@ pub async fn execute(
                         let forked_machine_url =
                             format!("http://{}", machine.fork().await.unwrap());
 
-                        thread::spawn(move || {
-                            let _ = task::block_on(async {
+                        let snapshotting_thread = thread::spawn(move || {
+                            let _ = task::block_on(async move {
                                 let forked_machine =
                                     JsonRpcCartesiMachineClient::new(forked_machine_url)
                                         .await
@@ -526,6 +564,7 @@ pub async fn execute(
                                 tracing::info!("done snapshotting base");
                             });
                         });
+                        threads.push(snapshotting_thread);
                     } else {
                         tracing::info!(
                             "did not manage to create lock, snapshot might already be in progress"
@@ -634,6 +673,11 @@ pub async fn execute(
         // We should basically not get here in a well-behaved app, it should FINISH (accept/reject), EXCEPTION
         if interpreter_break_reason == Value::String("halted".to_string()) {
             tracing::info!("halted");
+            for thread in threads {
+                tracing::info!("wait for thread to finish");
+                thread.join().unwrap();
+                tracing::info!("thread fihished");
+            }
             machine.destroy().await.unwrap();
             machine.shutdown().await.unwrap();
             return Err(std::io::Error::new(
@@ -643,6 +687,11 @@ pub async fn execute(
         }
         if interpreter_break_reason == Value::String("reached_target_mcycle".to_string()) {
             tracing::info!("reached cycles limit before completion of execution");
+            for thread in threads {
+                tracing::info!("wait for thread to finish");
+                thread.join().unwrap();
+                tracing::info!("thread fihished");
+            }
             machine.destroy().await.unwrap();
             machine.shutdown().await.unwrap();
             return Err(std::io::Error::new(
