@@ -34,7 +34,6 @@ pub struct ExecutorOptions {
     pub ipfs_url: String,
     pub ipfs_write_url: String,
     pub db_path: String,
-    pub base_cartesi_machine_path: String,
 }
 
 pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appchain: Cid) {
@@ -305,7 +304,6 @@ async fn handle_tx(
 
     let result = execute(
         forked_machine_url,
-        &opt.base_cartesi_machine_path,
         opt.ipfs_url.as_str(),
         opt.ipfs_write_url.as_str(),
         data,
