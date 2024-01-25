@@ -4,6 +4,8 @@
 
 # Come talk to us!
 
+Read more about Cartesi - it's awesome, at https://cartesi.io
+
 Join us on the Cartesi Discord in #cartesi-compute channel: https://discord.gg/pfXMwXDDfW
 
 Happy to talk you through development steps!
