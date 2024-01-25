@@ -2,6 +2,12 @@
 
 <img src="https://web3.link/lambada.png" width=50% height=50%>
 
+# Come talk to us!
+
+Join us on the Cartesi Discord in #cartesi-compute channel: https://discord.gg/pfXMwXDDfW
+
+Happy to talk you through development steps!
+
 # Why does Lambada matter?
 
 There is an emerging environment characterized by a modular choice becoming possible, combining existing blockchains like Ethereum, alt-VMs, high-capacity decentralized sequencers, atomic transaction inclusion, data availability layers, re-staking mechanisms like Eigenlayer, co-processors, and zero-knowledge proofs. 
