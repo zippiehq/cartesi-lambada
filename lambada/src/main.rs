@@ -162,6 +162,50 @@ async fn request_handler(
             .collect();
     }
     match (request.method().clone(), segments) {
+        (hyper::Method::GET, ["chain_info_template", sequencer]) => {
+            let random_number: u64 = rand::thread_rng().gen();
+            if *sequencer != "espresso" {
+                let json_error = serde_json::json!({
+                    "error": "Only espresso supported right now",
+                });
+                let json_error = serde_json::to_string(&json_error).unwrap();
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from(json_error))
+                    .unwrap();
+            }
+            let https = HttpsConnector::new();
+            let client = Client::builder().build::<_, hyper::Body>(https);
+
+            let uri: String = format!(
+                "{}/status/latest_block_height",
+                options.espresso_testnet_sequencer_url.clone()
+            )
+            .parse()
+            .unwrap();
+
+            let block_req = Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap();
+            let block_response = client.request(block_req).await.unwrap();
+            let body_bytes = hyper::body::to_bytes(block_response).await.unwrap();
+            let height = String::from_utf8_lossy(&body_bytes)
+                .trim()
+                .parse::<u64>()
+                .unwrap();
+
+            let json_response = serde_json::json!({
+               "sequencer": {"type": "espresso", "height": height.to_string(), "vm-id": random_number.to_string()},
+            });
+            let json_response = serde_json::to_string(&json_response).unwrap();
+
+            return Response::builder()
+                .status(StatusCode::OK)
+                .body(Body::from(json_response))
+                .unwrap();
+        }
         (hyper::Method::POST, ["compute", cid]) => {
             if request.headers().get("content-type")
                 == Some(&hyper::header::HeaderValue::from_static(
