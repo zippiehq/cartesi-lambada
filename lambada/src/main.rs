@@ -107,7 +107,7 @@ async fn main() {
             CREATE TABLE IF NOT EXISTS subscriptions (appchain_cid BLOB(48) NOT NULL);
             CREATE TABLE IF NOT EXISTS block_callbacks (
                 genesis_block_cid BLOB NOT NULL,
-                callback_url TEXT NOT NULL";
+                callback_url TEXT NOT NULL);";
         connection.execute(query).unwrap();
 
         let mut statement = connection.prepare("SELECT * FROM subscriptions").unwrap();
