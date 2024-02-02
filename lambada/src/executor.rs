@@ -255,7 +255,7 @@ async fn get_chain_info_cid(opt: &ExecutorOptions, current_cid: Cid) -> Option<C
     }
 }
 
-async fn trigger_callback_for_newblock(
+pub async fn trigger_callback_for_newblock(
     options: Arc<ExecutorOptions>,
     genesis_block_cid: &str,
     block_height: u64,
