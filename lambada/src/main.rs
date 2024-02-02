@@ -9,6 +9,7 @@ use celestia_types::nmt::Namespace;
 use celestia_types::Blob;
 use cid::Cid;
 use clap::Parser;
+use commit::Committable;
 use ethers::prelude::*;
 use futures::TryStreamExt;
 use hyper::body::to_bytes;
@@ -20,14 +21,13 @@ use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use lambada::executor::{calculate_sha256, subscribe, ExecutorOptions};
 use lambada::Options;
 use rand::Rng;
+use sequencer::Transaction;
 use serde::{Deserialize, Serialize};
 use sqlite::State;
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::io::Cursor;
 use std::sync::Arc;
 use std::thread;
-
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 struct BincodedCompute {
     metadata: HashMap<Vec<u8>, Vec<u8>>,
@@ -495,6 +495,79 @@ async fn request_handler(
             let response = Response::new(Body::from(json_request));
             response
         }
+        // XXX: does not handle the case where tx was sent before the start of the block height in the chain
+        (hyper::Method::GET, ["find_inclusion", appchain, tx_hash]) => {
+            let https = HttpsConnector::new();
+            let client = Client::builder().build::<_, hyper::Body>(https);
+
+            let uri: String = format!(
+                "{}/availability/transaction/hash/{}",
+                options.espresso_testnet_sequencer_url.clone(),
+                tx_hash
+            )
+            .parse()
+            .unwrap();
+
+            let block_req = Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap();
+            let block_response = client.request(block_req).await.unwrap();
+            let body_bytes = hyper::body::to_bytes(block_response).await.unwrap();
+
+            let json_tx = serde_json::from_slice::<serde_json::Value>(&body_bytes).unwrap();
+            match json_tx["transaction"]["vm"].as_u64() {
+                Some(vm_id) => {
+                    let ipfs_client = IpfsClient::from_str(&options.ipfs_url).unwrap();
+                    match ipfs_client
+                        .cat(&(appchain.to_string() + "/gov/chain-info.json"))
+                        .map_ok(|chunk| chunk.to_vec())
+                        .try_concat()
+                        .await
+                    {
+                        Ok(chain_info) => {
+                            let chain_info =
+                                serde_json::from_slice::<serde_json::Value>(&chain_info)
+                                    .expect("error reading chain-info.json file");
+
+                            let chain_vm_id: u64 = chain_info
+                                .get("sequencer")
+                                .unwrap()
+                                .get("vm-id")
+                                .unwrap()
+                                .as_str()
+                                .unwrap()
+                                .parse::<u64>()
+                                .unwrap();
+
+                            let height = json_tx["height"].as_i64().unwrap();
+
+                            if vm_id == chain_vm_id {
+                                let json_response = serde_json::json!({
+                                    "height": height,
+                                });
+                                let json_response = serde_json::to_string(&json_response).unwrap();
+                                return Response::builder()
+                                    .body(Body::from(json_response))
+                                    .unwrap();
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                }
+                None => {}
+            }
+
+            let json_error = serde_json::json!({
+                "error": "not found",
+            });
+            let json_error = serde_json::to_string(&json_error).unwrap();
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from(json_error))
+                .unwrap();
+        }
         (hyper::Method::GET, ["latest", appchain]) => {
             if !subscriptions
                 .lock()
@@ -643,16 +716,6 @@ async fn request_handler(
                 tracing::info!("chain type: {:?}", r#type);
                 match r#type.as_str() {
                     "espresso" => {
-                        let https = HttpsConnector::new();
-                        let client = Client::builder().build::<_, hyper::Body>(https);
-
-                        let uri = format!(
-                            "{}/submit/submit",
-                            options.espresso_testnet_sequencer_url.clone()
-                        )
-                        .parse()
-                        .unwrap();
-
                         let ipfs_client =
                             IpfsClient::from_str(options.ipfs_url.clone().as_str()).unwrap();
                         let chain_info = ipfs_client
@@ -677,24 +740,27 @@ async fn request_handler(
 
                         tracing::info!("data for submitting {:?}", data.clone());
 
-                        let submit_data: Data = Data {
-                            payload: data,
-                            vm: chain_vm_id,
-                        };
+                        let txn = Transaction::new(chain_vm_id.into(), data.clone());
+                        let url = format!("{}", options.espresso_testnet_sequencer_url.clone())
+                            .parse()
+                            .unwrap();
+                        let client: surf_disco::Client<tide_disco::error::ServerError> =
+                            surf_disco::Client::new(url);
 
-                        let mut req =
-                            Request::new(Body::from(bincode::serialize(&submit_data).unwrap()));
-                        *req.uri_mut() = uri;
-                        let mut map = HeaderMap::new();
-                        map.insert(
-                            header::CONTENT_TYPE,
-                            "application/octet-stream".parse().unwrap(),
-                        );
-                        *req.headers_mut() = map;
-                        *req.method_mut() = Method::POST;
+                        let res = client
+                            .post::<()>("submit/submit")
+                            .body_binary(&txn)
+                            .unwrap()
+                            .send()
+                            .await;
 
-                        let response = client.request(req).await.unwrap();
-                        return response;
+                        tracing::info!("submitting result {:?}", res);
+
+                        let json_response = serde_json::json!({
+                            "hash": txn.commit(),
+                        });
+                        let json_response = serde_json::to_string(&json_response).unwrap();
+                        return Response::builder().body(Body::from(json_response)).unwrap();
                     }
                     "celestia" => {
                         let token = match std::env::var("CELESTIA_TESTNET_NODE_AUTH_TOKEN_WRITE") {
