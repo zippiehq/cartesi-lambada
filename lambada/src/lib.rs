@@ -1,3 +1,4 @@
+pub mod eth_daemon;
 pub mod executor;
 
 use clap::Parser;

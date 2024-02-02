@@ -17,6 +17,7 @@ use hyper::{header, Body, Client, HeaderMap, Method, Request, Response, Server};
 use hyper::{StatusCode, Uri};
 use hyper_tls::HttpsConnector;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
+use lambada::eth_daemon;
 use lambada::executor::{calculate_sha256, subscribe, ExecutorOptions};
 use lambada::Options;
 use rand::Rng;
