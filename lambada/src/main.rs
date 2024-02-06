@@ -796,9 +796,9 @@ async fn request_handler(
                                 .unwrap();
                         let blobs = [blob];
                         match client.blob_submit(&blobs, SubmitOptions::default()).await {
-                            Ok(_) => {
+                            Ok(height) => {
                                 let json_submitting_result = serde_json::json!({
-                                    "result": "blob was submitted",
+                                    "height": height,
                                 });
                                 let json_submitting_result =
                                     serde_json::to_string(&json_submitting_result).unwrap();
