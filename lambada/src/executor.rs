@@ -13,7 +13,7 @@ use cid::Cid;
 use ethers::prelude::*;
 use futures_util::TryStreamExt;
 use hotshot_query_service::availability::BlockQueryData;
-use hyper::{header, Body, Client, HeaderMap, Method, Request, Response, Server};
+use hyper::{header, Body, Client, Method, Request};
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use jf_primitives::merkle_tree::namespaced_merkle_tree::NamespaceProof;
 use sequencer::{SeqTypes, VmId};

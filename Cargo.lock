@@ -4996,6 +4996,7 @@ dependencies = [
  "celestia-types",
  "cid 0.11.0",
  "clap",
+ "commit",
  "contract-bindings",
  "ethers",
  "futures",
