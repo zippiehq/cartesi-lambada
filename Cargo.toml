@@ -2,5 +2,5 @@
 
 members = [
   "cartesi_lambda",
-  "lambada",
+  "lambada", "wasm_pay_for_blobs",
 ]
