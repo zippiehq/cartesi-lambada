@@ -12,4 +12,5 @@ crate-type = ["cdylib", "rlib"]
 wasm-bindgen = "0.2"
 celestia-proto = "0.1.1"
 prost = "0.12.3"
-celestia-types = { git = "https://github.com/eigerco/lumina" }
+celestia-types = "0.1.1"
+prost-types = "0.12.3"

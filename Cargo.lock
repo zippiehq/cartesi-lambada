@@ -1328,6 +1328,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "blockstore"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5bff157a9c999bf0a39ca45e0b62076aa27135012cfbf9cc54ad1cf971876f0"
+dependencies = [
+ "async-trait",
+ "cid 0.11.0",
+ "dashmap",
+ "multihash 0.19.1",
+ "thiserror",
+]
+
+[[package]]
 name = "blst"
 version = "0.3.10"
 source = "git+https://github.com/EspressoSystems/blst.git?branch=no-std#faefc7fcb21864aaf4f6f443636ce8924108fcbd"
@@ -1514,12 +1527,41 @@ version = "0.1.0"
 source = "git+https://github.com/eigerco/lumina#129272e8d926b4c7badf27a26dea915323dd6489"
 dependencies = [
  "async-trait",
- "celestia-types",
+ "celestia-types 0.1.0",
  "http 0.2.11",
  "jsonrpsee 0.20.3",
  "serde",
  "thiserror",
  "tracing",
+]
+
+[[package]]
+name = "celestia-tendermint"
+version = "0.32.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95f93b5cbbd62b6cfde961889bf05d5fe19e70d8500c4465694306ed2695ac23"
+dependencies = [
+ "bytes 1.5.0",
+ "celestia-tendermint-proto",
+ "digest 0.10.7",
+ "ed25519",
+ "ed25519-consensus",
+ "flex-error",
+ "futures",
+ "num-traits",
+ "once_cell",
+ "prost 0.12.3",
+ "prost-types 0.12.3",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "serde_repr",
+ "sha2 0.10.8",
+ "signature",
+ "subtle",
+ "subtle-encoding",
+ "time 0.3.30",
+ "zeroize",
 ]
 
 [[package]]
@@ -1547,7 +1589,7 @@ source = "git+https://github.com/eigerco/lumina#129272e8d926b4c7badf27a26dea9153
 dependencies = [
  "base64 0.21.7",
  "bech32",
- "blockstore",
+ "blockstore 0.1.0",
  "bytes 1.5.0",
  "celestia-proto 0.1.0",
  "cid 0.11.0",
@@ -1563,6 +1605,33 @@ dependencies = [
  "sha2 0.10.8",
  "tendermint",
  "tendermint-proto",
+ "thiserror",
+]
+
+[[package]]
+name = "celestia-types"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc3c4c6698257125b315c04236a28cf5156a866211d336ba6ac70cc5f88e24eb"
+dependencies = [
+ "base64 0.21.7",
+ "bech32",
+ "blockstore 0.1.1",
+ "bytes 1.5.0",
+ "celestia-proto 0.1.1",
+ "celestia-tendermint",
+ "celestia-tendermint-proto",
+ "cid 0.11.0",
+ "const_format",
+ "enum_dispatch",
+ "libp2p-identity",
+ "multiaddr 0.18.1",
+ "multihash 0.19.1",
+ "nmt-rs",
+ "ruint",
+ "serde",
+ "serde_repr",
+ "sha2 0.10.8",
  "thiserror",
 ]
 
@@ -5025,7 +5094,7 @@ dependencies = [
  "cartesi-machine-json-rpc",
  "cartesi_lambda",
  "celestia-rpc",
- "celestia-types",
+ "celestia-types 0.1.0",
  "cid 0.11.0",
  "clap",
  "commit",
@@ -10362,8 +10431,9 @@ name = "wasm_pay_for_blobs"
 version = "0.1.0"
 dependencies = [
  "celestia-proto 0.1.1",
- "celestia-types",
+ "celestia-types 0.1.1",
  "prost 0.12.3",
+ "prost-types 0.12.3",
  "wasm-bindgen",
 ]
 
