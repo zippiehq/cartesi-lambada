@@ -10431,6 +10431,7 @@ name = "wasm_pay_for_blobs"
 version = "0.1.0"
 dependencies = [
  "celestia-proto 0.1.1",
+ "celestia-tendermint-proto",
  "celestia-types 0.1.1",
  "prost 0.12.3",
  "prost-types 0.12.3",
