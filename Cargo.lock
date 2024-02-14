@@ -10430,6 +10430,7 @@ checksum = "7ab9b36309365056cd639da3134bf87fa8f3d86008abf99e612384a6eecd459f"
 name = "wasm_pay_for_blobs"
 version = "0.1.0"
 dependencies = [
+ "base64 0.21.7",
  "celestia-proto 0.1.1",
  "celestia-tendermint-proto",
  "celestia-types 0.1.1",
