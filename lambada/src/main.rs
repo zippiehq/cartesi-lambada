@@ -897,7 +897,7 @@ async fn send_callback(
                 "output": resulted_cid,
                 "hash": sha256::digest(body),
                 "state_cid": cid,
-                "metadata": metadata,
+                "metadata": metadata.iter().map( |(k, v) | (hex::encode(&k), hex::encode(&v))).collect::<HashMap<String, String>>(),
             });
         }
         CallbackData::Error(error) => {
@@ -905,7 +905,7 @@ async fn send_callback(
                 "error": error.to_string(),
                 "hash": sha256::digest(body),
                 "state_cid": cid,
-                "metadata": metadata,
+                "metadata": metadata.iter().map( |(k, v) | (hex::encode(&k), hex::encode(&v))).collect::<HashMap<String, String>>(),
             });
         }
     }
