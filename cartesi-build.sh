@@ -64,3 +64,5 @@ TAIL_PID=$!
 perl /usr/bin/wait-for-callback.pl
 sleep 1
 kill $TAIL_PID
+
+echo "Done! Chain CID is $CHAIN_CID"
