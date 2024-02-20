@@ -46,9 +46,14 @@ clear
 
 echo "==============================================================================="
 echo "Now you can access the Cartesi development environment on http://localhost:8081"
+echo
+echo "or"
+echo
+HOSTNAME=`hostname`
+echo "docker exec -it $HOSTNAME /bin/bash"
 echo "==============================================================================="
 
-	
 while true; do
   sleep 3600
 done
+
