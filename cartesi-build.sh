@@ -49,7 +49,7 @@ CHAIN_DIR=`mktemp -u --tmpdir=/`
 
 ipfs files mkdir --cid-ver=1 $CHAIN_DIR
 ipfs files mkdir --cid-ver=1 $CHAIN_DIR/gov
-curl http://localhost:3033/chain_info_template/espresso | ipfs files write -e $CHAIN_DIR/gov/info.json
+curl http://localhost:3033/chain_info_template/espresso | ipfs files write -e $CHAIN_DIR/gov/chain-info.json
 ipfs files cp /ipfs/$APP_CID $CHAIN_DIR/gov/app
 
 CHAIN_CID=`ipfs files stat --hash $CHAIN_DIR`
@@ -66,3 +66,9 @@ sleep 1
 kill $TAIL_PID
 
 echo "Done! Chain CID is $CHAIN_CID"
+echo
+echo "You can now make your Lambada node:"
+echo "- subscribe to your chain with: curl http://127.0.0.1:3303/subscribe/$CHAIN_CID"
+echo "- send a transaction to your chain: curl -X POST -d 'transaction data' -H \"Content-type: application/octet-stream\" http://127.0.0.1:3033/submit/$CHAIN_CID"
+echo "- read latest state CID: curl http://127.0.0.1:3033/latest/$CHAIN_CID"
+echo ""
