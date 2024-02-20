@@ -43,7 +43,7 @@ RUN chmod +x /usr/bin/cartesi-build
 COPY ./entrypoint-devkit.sh /entrypoint-devkit.sh
 COPY ./entrypoint.sh /entrypoint-lambada.sh
 COPY ./sample /sample
-ARG DEVKIT=
+ARG DEVKIT=-lambada
 RUN cp /entrypoint$DEVKIT.sh /entrypoint.sh
 RUN mkdir -p /data
 
