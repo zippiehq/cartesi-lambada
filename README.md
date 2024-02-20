@@ -123,3 +123,18 @@ another terminal
 ``curl http://127.0.0.1:3033/block/<appchain>/<height>``
 
 ``curl http://127.0.0.1:3033/latest/<appchain>``
+
+# Building a devkit or for ARM64
+
+ARM64:
+
+``docker build -t cartesi-lambada:1.0 --build-arg ARCH=arm64 .``
+
+Devkit:
+
+``docker build -t cartesi-lambada-devkit:1.0 --build-arg DEVKIT=-devkit .``
+ 
+
+Running devkit:
+
+``docker run -p 8081:8081 --privileged cartesi-lambada-devkit:1.0``
