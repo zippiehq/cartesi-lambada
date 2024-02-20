@@ -68,7 +68,7 @@ kill $TAIL_PID
 echo "Done! Chain CID is $CHAIN_CID"
 echo
 echo "You can now make your Lambada node:"
-echo "- subscribe to your chain with: curl http://127.0.0.1:3303/subscribe/$CHAIN_CID"
+echo "- subscribe to your chain with: curl http://127.0.0.1:3033/subscribe/$CHAIN_CID"
 echo "- send a transaction to your chain: curl -X POST -d 'transaction data' -H \"Content-type: application/octet-stream\" http://127.0.0.1:3033/submit/$CHAIN_CID"
 echo "- read latest state CID: curl http://127.0.0.1:3033/latest/$CHAIN_CID"
 echo ""
