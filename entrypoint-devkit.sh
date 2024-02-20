@@ -18,7 +18,7 @@ if [ $? != 0 ]; then
 	echo "Failed to get and install code server"
 	exit 1
 fi
-mkdir -p /root/.config/code-server/ && echo 'bind-addr: 127.0.0.1:8081\nauth: none\ncert: false\n' > /root/.config/code-server/config.yaml
+mkdir -p /root/.config/code-server/ && printf 'bind-addr: 127.0.0.1:8081\nauth: none\ncert: false\n' > /root/.config/code-server/config.yaml
 curl -OL https://github.com/moby/buildkit/releases/download/v0.12.5/buildkit-v0.12.5.linux-$ARCH.tar.gz && mkdir -p buildkit && cd buildkit && tar xf ../buildkit-v0.12.5.linux-$ARCH.tar.gz && cp bin/* /usr/bin && cd .. && rm -rf ../buildkit*
 if [ $? != 0 ]; then
 	echo "Failed to get and install buildkit"
