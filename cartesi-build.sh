@@ -28,7 +28,7 @@ head -n 1 $WORK_DIR/urls | xargs -I@ ipfs cat @ | jq -r '.layers[].urls[]' | sed
 cat $WORK_DIR/urls2
 xargs -I@ ipfs files cp /ipfs/@ $APP_DIR/container-artifacts/@ < $WORK_DIR/urls2
 sed s/CID/$IPFS_CID/g < $WORK_DIR/app-boot-script | ipfs files write -e $APP_DIR/boot-script
-echo -n '{"base_image_cid":"bafybeihce4lf6o27hunier4fxemynrkdctrz4trueb5ufjqlh5w7ga4lte"}' | ipfs files write -e $APP_DIR/info.json
+echo -n '{"base_image_cid":"bafybeihf6icnydbsblssiit37oongsm3ptjya7st53vi2b4s56buqu6n5e"}' | ipfs files write -e $APP_DIR/info.json
 
 echo $APP_DIR
 echo "App can be found in IPFS MFS $APP_DIR"
