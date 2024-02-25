@@ -23,6 +23,7 @@ base64 = "0.21.5"
 rs-car-ipfs = { git = "https://github.com/zippiehq/rs-car-ipfs" }
 rs-car = "0.4.1"
 sha2 = "0.10.8"
+hyper-tls = "0.5.0"
 
 [features]
 measure_execution_time = []
