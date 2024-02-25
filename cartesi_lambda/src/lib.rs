@@ -699,7 +699,7 @@ pub async fn execute(
                 let uri: String = format!(
                     "{}/hint/{}",
                     std::env::var("KECCAK256_SOURCE").unwrap(),
-                    hex::encode(payload)
+                    str::replace(std::str::from_utf8(&payload.clone()).unwrap(), " ", "%20")
                 )
                 .parse()
                 .unwrap();
@@ -783,10 +783,11 @@ pub async fn execute(
                     let https = HttpsConnector::new();
                     let client = Client::builder().build::<_, hyper::Body>(https);
         
+                    // XXX this is bad
                     let uri: String = format!(
                         "{}/dehash/{}",
                         std::env::var("KECCAK256_SOURCE").unwrap(),
-                        hex::encode(id)
+                        std::str::from_utf8(id.as_slice()).unwrap()
                     )
                     .parse()
                     .unwrap();
