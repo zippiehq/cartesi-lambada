@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 zippiehq/cartesi-lambada-base-image:1.3 AS lambada-image
+FROM --platform=linux/amd64 zippiehq/lambada-base-image-ethdenver:1.0 AS lambada-image
 
 FROM debian:bookworm-20230725-slim AS build
 RUN apt-get update && DEBIAN_FRONTEND="noninteractive" apt-get install -y curl build-essential libssl-dev pkg-config protobuf-compiler cpp-riscv64-linux-gnu gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu bison flex bc
