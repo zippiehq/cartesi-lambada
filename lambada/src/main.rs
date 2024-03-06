@@ -18,6 +18,7 @@ use hyper::{header, Body, Client, HeaderMap, Method, Request, Response, Server};
 use hyper::{StatusCode, Uri};
 use hyper_tls::HttpsConnector;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
+use lambada::executor::BincodedCompute;
 use lambada::executor::{calculate_sha256, subscribe, ExecutorOptions};
 use lambada::Options;
 use rand::Rng;
@@ -26,21 +27,25 @@ use serde::{Deserialize, Serialize};
 use sqlite::State;
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::net::SocketAddr;
+use std::sync::mpsc;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::thread;
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-struct BincodedCompute {
-    metadata: HashMap<Vec<u8>, Vec<u8>>,
-    payload: Vec<u8>,
-}
-
-async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
+async fn start_subscriber(
+    options: Arc<lambada::Options>,
+    cid: Cid,
+    callback_node_info: Option<(Uri, String, String)>,
+    rx: Option<Arc<Mutex<Receiver<(u64, Option<String>)>>>>,
+) {
     let executor_options = ExecutorOptions {
         espresso_testnet_sequencer_url: options.espresso_testnet_sequencer_url.clone(),
         celestia_testnet_sequencer_url: options.celestia_testnet_sequencer_url.clone(),
         ipfs_url: options.ipfs_url.clone(),
         ipfs_write_url: options.ipfs_write_url.clone(),
         db_path: options.db_path.clone(),
+        callback_node_info: callback_node_info,
     };
     let cartesi_machine_url = options.cartesi_machine_url.to_string().clone();
 
@@ -48,12 +53,7 @@ async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid) {
     thread::spawn(move || {
         tracing::info!("in thread");
         let _ = task::block_on(async {
-            subscribe(
-                executor_options,
-                cartesi_machine_url.clone(),
-                Cid::try_from(cid).unwrap(),
-            )
-            .await;
+            subscribe(executor_options, cartesi_machine_url.clone(), cid, rx).await;
         });
         tracing::info!("out of thread");
     });
@@ -94,10 +94,15 @@ async fn main() {
 
     let opt = Options::parse();
     let subscriptions = Vec::<Cid>::new();
-    let addr = ([0, 0, 0, 0], 3033).into();
-
+    let addr: SocketAddr = ([0, 0, 0, 0], 3033).into();
     let context = Arc::new(opt);
     let subscriptions = Arc::new(Mutex::new(subscriptions));
+    let return_callback_ids: Arc<Mutex<HashMap<u64, Option<String>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let (tx, rx) = mpsc::channel();
+    let tx = Arc::new(Mutex::new(tx));
+    let rx = Arc::new(Mutex::new(rx));
+
     // Make sure database is initalized and then load subscriptions from database
     {
         let connection =
@@ -115,23 +120,39 @@ async fn main() {
         while let Ok(State::Row) = statement.next() {
             let cid = Cid::try_from(statement.read::<Vec<u8>, _>("appchain_cid").unwrap()).unwrap();
             subscriptions.lock().await.push(cid);
-            start_subscriber(Arc::clone(&context), cid).await;
+            start_subscriber(Arc::clone(&context), cid, None, None).await;
         }
     }
 
     let service = make_service_fn(|_| {
         let options = Arc::clone(&context);
         let subscriptions = Arc::clone(&subscriptions);
+        let return_callback_ids = Arc::clone(&return_callback_ids);
+        let rx = Arc::clone(&rx);
+        let tx = Arc::clone(&tx);
+
         async move {
             Ok::<_, Infallible>(service_fn(move |req| {
                 let options = Arc::clone(&options);
                 let subscriptions = Arc::clone(&subscriptions);
-
+                let return_callback_ids = Arc::clone(&return_callback_ids);
+                let rx = Arc::clone(&rx);
+                let tx = Arc::clone(&tx);
                 async move {
                     let path = req.uri().path().to_owned();
                     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
                     Ok::<_, Infallible>(
-                        request_handler(req, &segments, options, subscriptions).await,
+                        request_handler(
+                            return_callback_ids,
+                            addr,
+                            req,
+                            &segments,
+                            options,
+                            subscriptions,
+                            tx,
+                            rx,
+                        )
+                        .await,
                     )
                 }
             }))
@@ -144,10 +165,14 @@ async fn main() {
 }
 
 async fn request_handler(
+    ids: Arc<Mutex<HashMap<u64, Option<String>>>>,
+    server_address: SocketAddr,
     request: Request<Body>,
     segments: &[&str],
     options: Arc<lambada::Options>,
     subscriptions: Arc<Mutex<Vec<Cid>>>,
+    tx: Arc<Mutex<Sender<(u64, Option<String>)>>>,
+    rx: Arc<Mutex<Receiver<(u64, Option<String>)>>>,
 ) -> Response<Body> {
     let mut parsed_query: HashMap<String, String> = HashMap::new();
     if let Some(query) = request.uri().query() {
@@ -437,7 +462,7 @@ async fn request_handler(
                                 callback_uri,
                                 metadata.clone(),
                             )
-                            .await
+                            .await;
                         }
                         Err(e) => {
                             send_callback(
@@ -447,13 +472,31 @@ async fn request_handler(
                                 callback_uri,
                                 metadata.clone(),
                             )
-                            .await
+                            .await;
                         }
                     }
                 });
             });
             let json_request = r#"{"ok": "true"}"#;
             let response = Response::new(Body::from(json_request));
+            response
+        }
+        (hyper::Method::POST, ["return_callback", id]) => {
+            let body_bytes = hyper::body::to_bytes(request.into_body()).await.unwrap();
+            let response =
+                serde_json::from_slice::<serde_json::Value>(&body_bytes).expect("get new cid");
+            let mut data = None;
+            if let Some(new_cid) = response.get("output") {
+                data = Some(new_cid.as_str().unwrap().to_string());
+            }
+            ids.lock()
+                .await
+                .insert(id.to_string().parse::<u64>().unwrap(), data.clone());
+            tx.lock()
+                .await
+                .send((id.to_string().parse::<u64>().unwrap(), data))
+                .unwrap();
+            let response = Response::new(Body::empty());
             response
         }
         (hyper::Method::GET, ["health"]) => {
@@ -490,7 +533,35 @@ async fn request_handler(
                 statement.bind((1, &cid.to_bytes() as &[u8])).unwrap();
                 statement.next().unwrap();
             }
-            start_subscriber(options, cid).await;
+
+            let mut node_uri: Option<Uri> = None;
+            let mut node_appchain_cid: Option<String> = None;
+
+            for query in parsed_query {
+                if query.0.eq("node_uri") {
+                    match query.1.parse::<hyper::Uri>() {
+                        Ok(uri) => {
+                            node_uri = Some(uri);
+                        }
+                        Err(_) => {}
+                    }
+                }
+
+                if query.0.eq("node_appchain_cid") {
+                    match query.1.parse::<String>() {
+                        Ok(appchain) => {
+                            node_appchain_cid = Some(appchain);
+                        }
+                        Err(_) => {}
+                    }
+                }
+            }
+            let mut callback_node: Option<(Uri, String, String)> = None;
+            if let (Some(node_uri), Some(node_appchain_cid)) = (node_uri, node_appchain_cid) {
+                callback_node = Some((node_uri, node_appchain_cid, server_address.to_string()));
+            }
+
+            start_subscriber(options, cid, callback_node, Some(rx)).await;
             let json_request = r#"{"ok": "true"}"#;
             let response = Response::new(Body::from(json_request));
             response
@@ -938,7 +1009,6 @@ async fn send_callback(
     *req.method_mut() = Method::POST;
     let https = HttpsConnector::new();
     let client = Client::builder().build::<_, hyper::Body>(https);
-
     match client.request(req).await {
         Ok(_) => {}
         Err(e) => {

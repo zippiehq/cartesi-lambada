@@ -5,27 +5,28 @@ use tide_disco::error::ServerError;
 
 type HotShotClient = surf_disco::Client<ServerError>;
 
+use async_std::stream::StreamExt;
 use cartesi_lambda::execute;
 use cartesi_machine_json_rpc::client::JsonRpcCartesiMachineClient;
 use celestia_rpc::{BlobClient, HeaderClient};
 use celestia_types::nmt::Namespace;
 use cid::Cid;
-use ethers::prelude::*;
 use futures_util::TryStreamExt;
 use hotshot_query_service::availability::BlockQueryData;
+use hyper::Uri;
 use hyper::{header, Body, Client, Method, Request};
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use jf_primitives::merkle_tree::namespaced_merkle_tree::NamespaceProof;
 use sequencer::{SeqTypes, VmId};
-
+use serde::{Deserialize, Serialize};
 use sqlite::State;
 use std::collections::HashMap;
+use std::sync::mpsc::Receiver;
 use std::thread;
 use std::{
     sync::{Arc, Mutex},
     time::SystemTime,
 };
-
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;
 #[derive(Clone, Debug)]
 pub struct ExecutorOptions {
@@ -34,11 +35,16 @@ pub struct ExecutorOptions {
     pub ipfs_url: String,
     pub ipfs_write_url: String,
     pub db_path: String,
+    pub callback_node_info: Option<(Uri, String, String)>,
 }
 
-pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appchain: Cid) {
+pub async fn subscribe(
+    opt: ExecutorOptions,
+    cartesi_machine_url: String,
+    appchain: Cid,
+    rx: Option<Arc<async_std::sync::Mutex<Receiver<(u64, Option<String>)>>>>,
+) {
     tracing::info!("starting subscribe() of {:?}", appchain.to_string());
-
     let mut current_cid = appchain.clone();
     let genesis_cid_text = current_cid.to_string();
     let mut current_height: u64 = u64::MAX;
@@ -194,6 +200,7 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
                     chain_info_cid,
                     chain_vm_id,
                     genesis_cid_text.clone(),
+                    rx.clone(),
                 )
                 .await;
             }
@@ -209,6 +216,7 @@ pub async fn subscribe(opt: ExecutorOptions, cartesi_machine_url: String, appcha
                     &mut current_cid,
                     chain_vm_id,
                     genesis_cid_text.clone(),
+                    rx.clone(),
                 )
                 .await;
             }
@@ -297,44 +305,87 @@ async fn handle_tx(
     metadata: HashMap<Vec<u8>, Vec<u8>>,
     height: u64,
     genesis_cid_text: String,
+    rx: Option<Arc<async_std::sync::Mutex<Receiver<(u64, Option<String>)>>>>,
 ) {
-    let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
-
-    let time_before_execute = SystemTime::now();
-
-    let result = execute(
-        forked_machine_url,
-        opt.ipfs_url.as_str(),
-        opt.ipfs_write_url.as_str(),
-        data,
-        current_cid.clone(),
-        metadata,
-        None,
-    )
-    .await;
-    let time_after_execute = SystemTime::now();
-
-    tracing::info!(
-        "executing time {}",
-        time_after_execute
-            .duration_since(time_before_execute)
-            .unwrap()
-            .as_millis()
-    );
-
-    if let Ok(cid) = result {
-        tracing::info!(
-            "old current_cid {:?}",
-            Cid::try_from(current_cid.clone()).unwrap().to_string()
-        );
-        *current_cid = cid;
-        tracing::info!(
-            "resulted current_cid {:?}",
-            Cid::try_from(current_cid.clone()).unwrap().to_string()
-        );
-    } else {
-        tracing::info!("EXECUTE FAILED: reusing current_cid, as transaction failed");
+    let mut bincoded_compute_data: BincodedCompute = BincodedCompute {
+        metadata: metadata.clone(),
+        payload: vec![],
+    };
+    if let Some(payload) = data.clone() {
+        bincoded_compute_data.payload = payload;
     }
+    if let Some(callback_node_info) = opt.callback_node_info {
+        let req = Request::builder()
+            .method("POST")
+            .header("Content-Type", "application/octet-stream")
+            .uri(format!(
+                "{}compute_with_callback/{}?callback=http://{}/return_callback/{}&bincoded=true",
+                callback_node_info.0, callback_node_info.1, callback_node_info.2, height
+            ))
+            .body(Body::from(
+                bincode::serialize(&bincoded_compute_data).unwrap(),
+            ))
+            .unwrap();
+        let client = hyper::Client::new();
+        match client.request(req).await {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::info!("EXECUTE FAILED: {:?}", e);
+            }
+        }
+
+        tracing::info!("wait to tx be send to rx");
+        let id: Result<(u64, Option<String>), std::sync::mpsc::RecvError> =
+            rx.unwrap().lock().await.recv();
+        if let Ok(new_state_data) = id {
+            if let Some(new_cid) = new_state_data.1 {
+                let resulted_cid = Cid::try_from(new_cid.clone()).unwrap();
+                *current_cid = resulted_cid;
+            }
+        }
+    } else {
+        let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
+
+        let time_before_execute = SystemTime::now();
+
+        let result = execute(
+            forked_machine_url,
+            opt.ipfs_url.as_str(),
+            opt.ipfs_write_url.as_str(),
+            data,
+            current_cid.clone(),
+            metadata.clone(),
+            None,
+        )
+        .await;
+        let time_after_execute = SystemTime::now();
+
+        tracing::info!(
+            "executing time {}",
+            time_after_execute
+                .duration_since(time_before_execute)
+                .unwrap()
+                .as_millis()
+        );
+
+        match result {
+            Ok(resulted_cid) => {
+                tracing::info!(
+                    "old current_cid {:?}",
+                    Cid::try_from(current_cid.clone()).unwrap().to_string()
+                );
+                *current_cid = resulted_cid;
+                tracing::info!(
+                    "resulted current_cid {:?}",
+                    Cid::try_from(current_cid.clone()).unwrap().to_string()
+                );
+            }
+            Err(_) => {
+                tracing::info!("EXECUTE FAILED: reusing current_cid, as transaction failed");
+            }
+        }
+    }
+
     // XXX Is this right? Shouldn't this be after processing all tx'es?
     let connection = sqlite::Connection::open_thread_safe(format!(
         "{}/chains/{}",
@@ -380,6 +431,7 @@ async fn subscribe_espresso(
     current_chain_info_cid: Arc<Mutex<Option<Cid>>>,
     chain_vm_id: u64,
     genesis_cid_text: String,
+    rx: Option<Arc<async_std::sync::Mutex<Receiver<(u64, Option<String>)>>>>,
 ) {
     let query_service_url = Url::parse(&sequencer_url)
         .unwrap()
@@ -462,6 +514,7 @@ async fn subscribe_espresso(
                                 metadata.clone(),
                                 height,
                                 genesis_cid_text.clone(),
+                                rx.clone(),
                             )
                             .await;
                         }
@@ -503,6 +556,7 @@ async fn subscribe_celestia(
     current_cid: &mut Cid,
     chain_vm_id: u64,
     genesis_cid_text: String,
+    rx: Option<Arc<async_std::sync::Mutex<Receiver<(u64, Option<String>)>>>>,
 ) {
     let token = match std::env::var("CELESTIA_TESTNET_NODE_AUTH_TOKEN_READ") {
         Ok(token) => token,
@@ -572,6 +626,7 @@ async fn subscribe_celestia(
                                         metadata.clone(),
                                         state.height,
                                         genesis_cid_text.clone(),
+                                        rx.clone(),
                                     )
                                     .await;
                                 }
@@ -612,4 +667,10 @@ pub fn calculate_sha256(input: &[u8]) -> Vec<u8> {
     let mut hasher = Sha256::new();
     hasher.update(input);
     hasher.finalize().to_vec()
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+pub struct BincodedCompute {
+    pub metadata: HashMap<Vec<u8>, Vec<u8>>,
+    pub payload: Vec<u8>,
 }
