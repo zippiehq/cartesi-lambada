@@ -737,20 +737,6 @@ async fn request_handler(
                 .unwrap();
         }
         (hyper::Method::POST, ["submit", appchain]) => {
-            if !subscriptions
-                .lock()
-                .await
-                .contains(&Cid::try_from(appchain.to_string().clone()).unwrap())
-            {
-                let json_error = serde_json::json!({
-                    "error": "no such subscription",
-                });
-                let json_error = serde_json::to_string(&json_error).unwrap();
-                return Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::from(json_error))
-                    .unwrap();
-            }
             if request.headers().get("content-type")
                 == Some(&hyper::header::HeaderValue::from_static(
                     "application/octet-stream",
