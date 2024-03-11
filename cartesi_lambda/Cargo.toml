@@ -22,3 +22,6 @@ sequencer = { git = "https://github.com/EspressoSystems/espresso-sequencer" }
 base64 = "0.21.5"
 rs-car-ipfs = { git = "https://github.com/zippiehq/rs-car-ipfs" }
 rs-car = "0.4.1"
+
+[features]
+measure_execution_time = []

@@ -19,7 +19,7 @@ serde = "1.0.163"
 clap = "4.3.10"
 futures = "0.3.28"
 async-std = { version = "1.12", features = ["attributes"] }
-cartesi_lambda = {path = "../cartesi_lambda"}
+cartesi_lambda = {path = "../cartesi_lambda", features = ["measure_execution_time"]}
 hyper = { version = "0.14", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3.28"
