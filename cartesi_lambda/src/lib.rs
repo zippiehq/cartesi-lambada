@@ -1,6 +1,4 @@
 use async_std::stream::StreamExt;
-use futures::AsyncBufRead;
-use futures::AsyncReadExt;
 use futures::TryStreamExt;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 
@@ -68,7 +66,11 @@ pub async fn execute(
     max_cycles_input: Option<u64>,
 ) -> Result<Cid, std::io::Error> {
     tracing::info!("state cid {:?}", state_cid.to_string());
-
+    let time_before_receive_app_cid = SystemTime::now();
+    let mut measure_execution_time = false;
+    if cfg!(feature = "measure_execution_time") {
+        measure_execution_time = true;
+    }
     // Resolve what the app CID is in this current state
     let req = Request::builder()
         .method("POST")
@@ -103,6 +105,16 @@ pub async fn execute(
             panic!("{}", e)
         }
     }
+    let time_after_receive_app_cid = SystemTime::now();
+    if measure_execution_time {
+        tracing::info!(
+            "resolving current app CID took {} milliseconds",
+            time_after_receive_app_cid
+                .duration_since(time_before_receive_app_cid)
+                .unwrap()
+                .as_millis()
+        );
+    }
     tracing::info!(
         "app cid {:?}",
         Cid::try_from(app_cid.clone()).unwrap().to_string()
@@ -111,12 +123,27 @@ pub async fn execute(
     let read_client = IpfsClient::from_str(ipfs_url).unwrap();
     let write_client = IpfsClient::from_str(ipfs_write_url).unwrap();
 
+    let time_before_receive_info_file = SystemTime::now();
+
     let app_info_raw = read_client
         .cat(&format!("{}/info.json", app_cid.to_string()))
         .map_ok(|chunk| chunk.to_vec())
         .try_concat()
         .await
         .unwrap();
+
+    let time_after_receive_info_file = SystemTime::now();
+
+    if measure_execution_time {
+        tracing::info!(
+            "receiving {}/info.json took {} milliseconds",
+            app_cid.to_string(),
+            time_after_receive_info_file
+                .duration_since(time_before_receive_info_file)
+                .unwrap()
+                .as_millis()
+        );
+    }
 
     let app_info = serde_json::from_slice::<serde_json::Value>(&app_info_raw).unwrap();
     let base_image = String::from(
@@ -253,12 +280,24 @@ pub async fn execute(
             .open(format!("/data/snapshot/{}.lock", base_image))
             .is_ok()
         {
+            let before_dedup_download_directory = SystemTime::now();
             dedup_download_directory(
                 ipfs_url,
                 base_image_cid,
                 format!("/data/snapshot/{}", base_image),
             )
             .await;
+            let after_dedup_download_directory = SystemTime::now();
+            if measure_execution_time {
+                tracing::info!(
+                    "Full dedup_load_directory took {} milliseconds",
+                    after_dedup_download_directory
+                        .duration_since(before_dedup_download_directory)
+                        .unwrap()
+                        .as_millis()
+                );
+            }
+
             std::fs::remove_file(format!("/data/snapshot/{}.lock", base_image)).unwrap();
             let before_load_machine = SystemTime::now();
             // XXX we should really do root hash check at least on downloaded stuff that we've been pointed to?
@@ -289,13 +328,48 @@ pub async fn execute(
     }
     loop {
         let mut interpreter_break_reason = Value::Null;
+        let time_before_read_iflags_y = SystemTime::now();
         // Are we yielded? If not, continue machine execution
         if !machine.read_iflags_y().await.unwrap() {
+            let time_after_read_iflags_y = SystemTime::now();
+            if measure_execution_time {
+                tracing::info!(
+                    "reading iflags y took {} milliseconds",
+                    time_after_read_iflags_y
+                        .duration_since(time_before_read_iflags_y)
+                        .unwrap()
+                        .as_millis()
+                );
+            }
+            let time_before_run_machine = SystemTime::now();
             interpreter_break_reason = machine.run(max_cycles).await.unwrap();
+            let time_after_run_machine = SystemTime::now();
+            if measure_execution_time {
+                tracing::info!(
+                    "machine running to {} cycles y took {} milliseconds",
+                    max_cycles,
+                    time_after_run_machine
+                        .duration_since(time_before_run_machine)
+                        .unwrap()
+                        .as_millis()
+                );
+            }
         }
+        let time_before_read_opt = SystemTime::now();
 
         // Command/opcode is 64-bit big endian value at MACHINE_IO_ADDRESSS
         let read_opt_be_bytes = machine.read_memory(MACHINE_IO_ADDRESSS, 8).await.unwrap();
+        let time_after_read_opt = SystemTime::now();
+        if measure_execution_time {
+            tracing::info!(
+                "read_memory(MACHINE_IO_ADDRESSS, 8)(reading opt) took {} milliseconds",
+                time_after_read_opt
+                    .duration_since(time_before_read_opt)
+                    .unwrap()
+                    .as_millis()
+            );
+        }
+
         let opt = u64::from_be_bytes(read_opt_be_bytes.try_into().unwrap());
 
         match opt {
@@ -309,6 +383,8 @@ pub async fn execute(
             // Unavailable IPFS CID should kill the machine, data requested by machine is assumed to be available.
             READ_BLOCK => {
                 tracing::info!("READ_BLOCK");
+                let time_before_read_cid_length = SystemTime::now();
+
                 let length = u64::from_be_bytes(
                     machine
                         .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
@@ -317,6 +393,18 @@ pub async fn execute(
                         .try_into()
                         .unwrap(),
                 );
+                let time_after_read_cid_length = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                        "read_memory(MACHINE_IO_ADDRESSS + 8, 8) (cid length) took {} milliseconds",
+                        time_after_read_cid_length
+                            .duration_since(time_before_read_cid_length)
+                            .unwrap()
+                            .as_millis()
+                    );
+                }
+
+                let time_before_read_cid = SystemTime::now();
 
                 let cid = Cid::try_from(
                     machine
@@ -325,21 +413,57 @@ pub async fn execute(
                         .unwrap(),
                 )
                 .unwrap();
+                let time_after_read_cid = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                    "read_memory(MACHINE_IO_ADDRESSS + 16, length) (length) took {} milliseconds",
+                    time_after_read_cid
+                        .duration_since(time_before_read_cid)
+                        .unwrap()
+                        .as_millis()
+                );
+                }
 
                 tracing::info!("read cid {:?}", cid.to_string());
-
+                let time_before_get_block = SystemTime::now();
                 let block = read_client
                     .block_get(cid.to_string().as_str())
                     .map_ok(|chunk| chunk.to_vec())
                     .try_concat()
                     .await
                     .unwrap();
+                let time_after_get_block = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                        "block_get({}) took {} milliseconds",
+                        cid.to_string(),
+                        time_after_get_block
+                            .duration_since(time_before_get_block)
+                            .unwrap()
+                            .as_millis()
+                    );
+                }
+
                 tracing::info!("block len {:?}", block.len());
+                let time_before_write_block = SystemTime::now();
 
                 machine
                     .write_memory(MACHINE_IO_ADDRESSS + 16, STANDARD.encode(block.clone()))
                     .await
                     .unwrap();
+                let time_after_write_block = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                    "write_memory(MACHINE_IO_ADDRESSS + 16, STANDARD.encode(block.clone())) (writing encoded block) took {} milliseconds",
+                    time_after_write_block
+                    .duration_since(time_before_write_block)
+                    .unwrap()
+                    .as_millis()
+                );
+                }
+
+                let time_before_write_block_len = SystemTime::now();
+
                 machine
                     .write_memory(
                         MACHINE_IO_ADDRESSS,
@@ -347,6 +471,17 @@ pub async fn execute(
                     )
                     .await
                     .unwrap();
+                let time_after_write_block_len = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                    "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(block.len().to_be_bytes().to_vec())) (writing block length) took {} milliseconds",
+                    time_after_write_block_len
+                    .duration_since(time_before_write_block_len)
+                    .unwrap()
+                    .as_millis()
+                );
+                }
+
                 tracing::info!("read_block info was written");
             }
             // Handles the EXCEPTION case coming from VM/guest:
@@ -355,8 +490,32 @@ pub async fn execute(
             // 3. Returns an error of type `std::io::Error` with the kind `std::io::ErrorKind::Other`, indicating a general error, and a message "exception" to signify that an exception occurred.
             EXCEPTION => {
                 tracing::info!("HTIF_YIELD_REASON_TX_EXCEPTION");
+                let before_destroying_machine = SystemTime::now();
                 machine.destroy().await.unwrap();
+                let after_destroying_machine = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                        "destroying machine took {} milliseconds",
+                        after_destroying_machine
+                            .duration_since(before_destroying_machine)
+                            .unwrap()
+                            .as_millis()
+                    );
+                }
+
+                let before_shutting_down_machine = SystemTime::now();
                 machine.shutdown().await.unwrap();
+                let after_shutting_down_machine = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                        "shutting down machine took {} milliseconds",
+                        after_shutting_down_machine
+                            .duration_since(before_shutting_down_machine)
+                            .unwrap()
+                            .as_millis()
+                    );
+                }
+
                 return Err(std::io::Error::new(std::io::ErrorKind::Other, "exception"));
             }
             // Handles the LOAD_TX action coming from VM/guest:
@@ -400,8 +559,22 @@ pub async fn execute(
                         .is_ok()
                     {
                         let arc_app_cid = Arc::new(app_cid.clone());
+                        let time_before_forking_machine = SystemTime::now();
+
                         let forked_machine_url =
                             format!("http://{}", machine.fork().await.unwrap());
+
+                        let time_after_forking_machine = SystemTime::now();
+                        if measure_execution_time {
+                            tracing::info!(
+                                "storing forked machine {} took {} milliseconds",
+                                forked_machine_url,
+                                time_after_forking_machine
+                                    .duration_since(time_before_forking_machine)
+                                    .unwrap()
+                                    .as_millis()
+                            );
+                        }
 
                         let base_image = base_image.clone();
 
@@ -421,6 +594,7 @@ pub async fn execute(
                                         app_cid.clone().to_string()
                                     )
                                 );
+                                let time_before_storing_forked_machine = SystemTime::now();
 
                                 forked_machine
                                     .store(&format!(
@@ -430,8 +604,42 @@ pub async fn execute(
                                     ))
                                     .await
                                     .unwrap();
+                                let time_after_storing_forked_machine = SystemTime::now();
+                                if measure_execution_time {
+                                    tracing::info!(
+                                    "storing forked machine /data/snapshot/{}_{} took {} milliseconds",
+                                    base_image,
+                                    app_cid.clone().to_string(),
+                                    time_after_storing_forked_machine
+                                    .duration_since(time_before_storing_forked_machine)
+                                    .unwrap()
+                                    .as_millis()
+                                );
+                                }
+                                let before_destroying_machine = SystemTime::now();
                                 forked_machine.destroy().await.unwrap();
+                                let after_destroying_machine = SystemTime::now();
+                                if measure_execution_time {
+                                    tracing::info!(
+                                        "destroying forked machine took {} milliseconds",
+                                        after_destroying_machine
+                                            .duration_since(before_destroying_machine)
+                                            .unwrap()
+                                            .as_millis()
+                                    );
+                                }
+                                let before_shutting_down_machine = SystemTime::now();
                                 forked_machine.shutdown().await.unwrap();
+                                let after_shutting_down_machine = SystemTime::now();
+                                if measure_execution_time {
+                                    tracing::info!(
+                                        "shutting down forked machine took {} milliseconds",
+                                        after_shutting_down_machine
+                                            .duration_since(before_shutting_down_machine)
+                                            .unwrap()
+                                            .as_millis()
+                                    );
+                                }
                                 std::fs::remove_file(format!(
                                     "/data/snapshot/{}_{}.lock",
                                     base_image,
@@ -451,11 +659,36 @@ pub async fn execute(
                 }
                 if payload.is_none() {
                     tracing::info!("machine warmed up");
+                    let before_destroying_machine = SystemTime::now();
                     machine.destroy().await.unwrap();
+                    let after_destroying_machine = SystemTime::now();
+                    if measure_execution_time {
+                        tracing::info!(
+                            "destroying machine took {} milliseconds",
+                            after_destroying_machine
+                                .duration_since(before_destroying_machine)
+                                .unwrap()
+                                .as_millis()
+                        );
+                    }
+
+                    let before_shutting_down_machine = SystemTime::now();
                     machine.shutdown().await.unwrap();
+                    let after_shutting_down_machine = SystemTime::now();
+                    if measure_execution_time {
+                        tracing::info!(
+                            "shutting down machine took {} milliseconds",
+                            after_shutting_down_machine
+                                .duration_since(before_shutting_down_machine)
+                                .unwrap()
+                                .as_millis()
+                        );
+                    }
+
                     return Ok(Cid::default());
                 }
                 let cid_length = state_cid.clone().to_bytes().len() as u64;
+                let time_before_write_cid_length = SystemTime::now();
 
                 machine
                     .write_memory(
@@ -464,6 +697,19 @@ pub async fn execute(
                     )
                     .await
                     .unwrap();
+                let time_after_write_cid_length = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                    "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(cid_length.to_be_bytes().to_vec())) (writing encoded cid length) took {} milliseconds",
+                    time_after_write_cid_length
+                    .duration_since(time_before_write_cid_length)
+                    .unwrap()
+                    .as_millis()
+                );
+                }
+
+                let time_before_write_state_cid = SystemTime::now();
+
                 machine
                     .write_memory(
                         MACHINE_IO_ADDRESSS + 8,
@@ -471,8 +717,20 @@ pub async fn execute(
                     )
                     .await
                     .unwrap();
+                let time_after_write_state_cid = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                    "write_memory(MACHINE_IO_ADDRESSS + 8, STANDARD.encode(state_cid.clone().to_bytes()),)(writing encoded cid) took {} milliseconds",
+                    time_after_write_state_cid
+                    .duration_since(time_before_write_state_cid)
+                    .unwrap()
+                    .as_millis()
+                );
+                }
 
                 let payload_length = payload.clone().unwrap().len() as u64;
+
+                let time_before_write_payload_length = SystemTime::now();
 
                 machine
                     .write_memory(
@@ -481,6 +739,20 @@ pub async fn execute(
                     )
                     .await
                     .unwrap();
+                let time_after_write_payload_length = SystemTime::now();
+
+                if measure_execution_time {
+                    tracing::info!(
+                    "write_memory(MACHINE_IO_ADDRESSS + 16 + cid_length, STANDARD.encode(payload_length.to_be_bytes().to_vec()))(writing payload length) took {} milliseconds",
+                    time_after_write_payload_length
+                    .duration_since(time_before_write_payload_length)
+                    .unwrap()
+                    .as_millis()
+                );
+                }
+
+                let time_before_write_payload = SystemTime::now();
+
                 machine
                     .write_memory(
                         MACHINE_IO_ADDRESSS + 24 + cid_length,
@@ -489,12 +761,25 @@ pub async fn execute(
                     .await
                     .unwrap();
 
+                let time_after_write_payload = SystemTime::now();
+
+                if measure_execution_time {
+                    tracing::info!(
+                        "write_memory(MACHINE_IO_ADDRESSS + 24 + cid_length, STANDARD.encode(payload.clone().unwrap()))(writing payload) took {} milliseconds",
+                        time_after_write_payload
+                    .duration_since(time_before_write_payload)
+                    .unwrap()
+                    .as_millis()
+                    );
+                }
+
                 tracing::info!("load_tx info was written");
             }
             // FINISH: The guest has finished execution and reported back a status code, accept or rejection of the transaction.
             // It also reports back the current IPFS CID of the state which we return to the consumer of this function.
             FINISH => {
                 tracing::info!("FINISH");
+                let time_before_read_status = SystemTime::now();
 
                 let status = u64::from_be_bytes(
                     machine
@@ -504,6 +789,19 @@ pub async fn execute(
                         .try_into()
                         .unwrap(),
                 );
+                let time_after_read_status = SystemTime::now();
+
+                if measure_execution_time {
+                    tracing::info!(
+                    "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading status) took {} milliseconds",
+                    time_after_read_status
+                    .duration_since(time_before_read_status)
+                    .unwrap()
+                    .as_millis()
+                );
+                }
+
+                let time_before_read_data_length = SystemTime::now();
 
                 let length = u64::from_be_bytes(
                     machine
@@ -513,18 +811,67 @@ pub async fn execute(
                         .try_into()
                         .unwrap(),
                 );
+                let time_after_read_data_length = SystemTime::now();
+
+                if measure_execution_time {
+                    tracing::info!(
+                    "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading status) took {} milliseconds",
+                    time_after_read_data_length
+                    .duration_since(time_before_read_data_length)
+                    .unwrap()
+                    .as_millis()
+                );
+                }
+
+                let time_before_read_data = SystemTime::now();
 
                 let data = machine
                     .read_memory(MACHINE_IO_ADDRESSS + 24, length)
                     .await
                     .unwrap();
+                let time_after_read_data = SystemTime::now();
+
+                if measure_execution_time {
+                    tracing::info!(
+                    "read_memory(MACHINE_IO_ADDRESSS + 24, length)(reading data) took {} milliseconds",
+                    time_after_read_data
+                    .duration_since(time_before_read_data)
+                    .unwrap()
+                    .as_millis()
+                );
+                }
 
                 match status {
                     0 => {
                         tracing::info!("HTIF_YIELD_REASON_RX_ACCEPTED");
                         println!("HTIF_YIELD_REASON_RX_ACCEPTED");
+                        let before_destroying_machine = SystemTime::now();
                         machine.destroy().await.unwrap();
+                        let after_destroying_machine = SystemTime::now();
+
+                        if measure_execution_time {
+                            tracing::info!(
+                                "destroying machine took {} milliseconds",
+                                after_destroying_machine
+                                    .duration_since(before_destroying_machine)
+                                    .unwrap()
+                                    .as_millis()
+                            );
+                        }
+
+                        let before_shutting_down_machine = SystemTime::now();
                         machine.shutdown().await.unwrap();
+                        let after_shutting_down_machine = SystemTime::now();
+                        if measure_execution_time {
+                            tracing::info!(
+                                "shutting down machine took {} milliseconds",
+                                after_shutting_down_machine
+                                    .duration_since(before_shutting_down_machine)
+                                    .unwrap()
+                                    .as_millis()
+                            );
+                        }
+
                         tracing::info!(
                             "FINISH received cid {}",
                             Cid::try_from(data.clone()).unwrap()
@@ -535,16 +882,66 @@ pub async fn execute(
                     1 => {
                         tracing::info!("HTIF_YIELD_REASON_RX_REJECTED");
                         println!("HTIF_YIELD_REASON_RX_REJECTED");
+                        let before_destroying_machine = SystemTime::now();
                         machine.destroy().await.unwrap();
+                        let after_destroying_machine = SystemTime::now();
+
+                        if measure_execution_time {
+                            tracing::info!(
+                                "destroying machine took {} milliseconds",
+                                after_destroying_machine
+                                    .duration_since(before_destroying_machine)
+                                    .unwrap()
+                                    .as_millis()
+                            );
+                        }
+
+                        let before_shutting_down_machine = SystemTime::now();
                         machine.shutdown().await.unwrap();
+                        let after_shutting_down_machine = SystemTime::now();
+
+                        if measure_execution_time {
+                            tracing::info!(
+                                "shutting down machine took {} milliseconds",
+                                after_shutting_down_machine
+                                    .duration_since(before_shutting_down_machine)
+                                    .unwrap()
+                                    .as_millis()
+                            );
+                        }
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::Other,
                             "transaction was rejected",
                         ));
                     }
                     _ => {
+                        let before_destroying_machine = SystemTime::now();
                         machine.destroy().await.unwrap();
+                        let after_destroying_machine = SystemTime::now();
+
+                        if measure_execution_time {
+                            tracing::info!(
+                                "destroying machine took {} milliseconds",
+                                after_destroying_machine
+                                    .duration_since(before_destroying_machine)
+                                    .unwrap()
+                                    .as_millis()
+                            );
+                        }
+
+                        let before_shutting_down_machine = SystemTime::now();
                         machine.shutdown().await.unwrap();
+                        let after_shutting_down_machine = SystemTime::now();
+                        if measure_execution_time {
+                            tracing::info!(
+                                "shutting down machine took {} milliseconds",
+                                after_shutting_down_machine
+                                    .duration_since(before_shutting_down_machine)
+                                    .unwrap()
+                                    .as_millis()
+                            );
+                        }
+
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::Other,
                             "unknown status",
@@ -560,6 +957,8 @@ pub async fn execute(
             // 5. Invokes the 'block_put' method of a IPFS client with the Cursor as an argument, which stores the block using the data stream.
             WRITE_BLOCK => {
                 tracing::info!("WRITE_BLOCK");
+                let time_before_read_data_length = SystemTime::now();
+
                 let length = u64::from_be_bytes(
                     machine
                         .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
@@ -568,14 +967,49 @@ pub async fn execute(
                         .try_into()
                         .unwrap(),
                 );
+                let time_after_read_data_length = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                    "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading data length) took {} milliseconds",
+                    time_after_read_data_length
+                        .duration_since(time_before_read_data_length)
+                        .unwrap()
+                        .as_millis()
+                );
+                }
+
+                let time_before_read_data = SystemTime::now();
 
                 let memory = machine
                     .read_memory(MACHINE_IO_ADDRESSS + 16, length)
                     .await
                     .unwrap();
 
+                let time_after_read_data = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                        "read_memory(MACHINE_IO_ADDRESSS + 16, length)(reading data ) took {} milliseconds",
+                        time_after_read_data
+                            .duration_since(time_before_read_data)
+                            .unwrap()
+                            .as_millis()
+                    );
+                }
+
                 let data = Cursor::new(memory.clone());
+                let time_before_putting_block = SystemTime::now();
+
                 let put_response = write_client.block_put(data).await.unwrap();
+                let time_after_putting_block = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                        "block_put(data)(putting data) took {} milliseconds",
+                        time_after_putting_block
+                            .duration_since(time_before_putting_block)
+                            .unwrap()
+                            .as_millis()
+                    );
+                }
             }
             // op LOAD_APP is a signal from the base image that it's ready to be told which app CID to attempt to initialize
             // This results in length of app CID (BE u64) and the CID itself being written into the flash drive
@@ -599,8 +1033,22 @@ pub async fn execute(
                         .open(format!("/data/snapshot/{}_bootedup.lock", base_image))
                         .is_ok()
                     {
+                        let time_before_forking_machine = SystemTime::now();
+
                         let forked_machine_url =
                             format!("http://{}", machine.fork().await.unwrap());
+                        let time_after_forking_machine = SystemTime::now();
+                        if measure_execution_time {
+                            tracing::info!(
+                                "storing forked machine {} took {} milliseconds",
+                                forked_machine_url,
+                                time_after_forking_machine
+                                    .duration_since(time_before_forking_machine)
+                                    .unwrap()
+                                    .as_millis()
+                            );
+                        }
+
                         let base_image = base_image.clone();
 
                         thread::spawn(move || {
@@ -613,12 +1061,50 @@ pub async fn execute(
                                     "snapshot stage load app to dir: /data/snapshot/{}",
                                     format!("{}_bootedup", base_image)
                                 );
+                                let time_before_storing_forked_machine = SystemTime::now();
+
                                 forked_machine
                                     .store(&format!("/data/snapshot/{}_bootedup", base_image))
                                     .await
                                     .unwrap();
+                                let time_after_storing_forked_machine = SystemTime::now();
+                                if measure_execution_time {
+                                    tracing::info!(
+                                    "storing forked machine /data/snapshot/{}_bootedup took {} milliseconds",
+                                    base_image,
+                                    time_after_storing_forked_machine
+                                        .duration_since(time_before_storing_forked_machine)
+                                        .unwrap()
+                                        .as_millis()
+                                );
+                                }
+
+                                let before_destroying_machine = SystemTime::now();
                                 forked_machine.destroy().await.unwrap();
+                                let after_destroying_machine = SystemTime::now();
+                                if measure_execution_time {
+                                    tracing::info!(
+                                        "destroying forked machine took {} milliseconds",
+                                        after_destroying_machine
+                                            .duration_since(before_destroying_machine)
+                                            .unwrap()
+                                            .as_millis()
+                                    );
+                                }
+
+                                let before_shutting_down_machine = SystemTime::now();
                                 forked_machine.shutdown().await.unwrap();
+                                let after_shutting_down_machine = SystemTime::now();
+                                if measure_execution_time {
+                                    tracing::info!(
+                                        "shutting down forked machine took {} milliseconds",
+                                        after_shutting_down_machine
+                                            .duration_since(before_shutting_down_machine)
+                                            .unwrap()
+                                            .as_millis()
+                                    );
+                                }
+
                                 std::fs::remove_file(format!(
                                     "/data/snapshot/{}_bootedup.lock",
                                     base_image
@@ -639,6 +1125,7 @@ pub async fn execute(
 
                 tracing::info!("app cid {:?}", Cid::try_from(app_cid.clone()).unwrap());
                 let cid_length = app_cid.clone().to_bytes().len() as u64;
+                let time_before_writing_cid_length = SystemTime::now();
 
                 machine
                     .write_memory(
@@ -647,6 +1134,18 @@ pub async fn execute(
                     )
                     .await
                     .unwrap();
+                let time_after_writing_cid_length = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                    "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(cid_length.to_be_bytes().to_vec()))(writing cid length) took {} milliseconds",
+                    time_after_writing_cid_length
+                        .duration_since(time_before_writing_cid_length)
+                        .unwrap()
+                        .as_millis()
+                );
+                }
+
+                let time_before_writing_app_cid = SystemTime::now();
                 machine
                     .write_memory(
                         MACHINE_IO_ADDRESSS + 8,
@@ -654,6 +1153,17 @@ pub async fn execute(
                     )
                     .await
                     .unwrap();
+                let time_after_writing_app_cid = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                    "write_memory(MACHINE_IO_ADDRESSS + 8, STANDARD.encode(app_cid.clone().to_bytes()),)(writing cid length) took {} milliseconds",
+                    time_after_writing_app_cid
+                        .duration_since(time_before_writing_app_cid)
+                        .unwrap()
+                        .as_millis()
+                );
+                }
+
                 tracing::info!("load app info was written");
             }
 
@@ -662,6 +1172,7 @@ pub async fn execute(
             // In memory this is a BE u64 value of length of payload
             HINT => {
                 tracing::info!("HINT");
+                let time_before_reading_payload_length = SystemTime::now();
 
                 let payload_length = u64::from_be_bytes(
                     machine
@@ -671,6 +1182,18 @@ pub async fn execute(
                         .try_into()
                         .unwrap(),
                 );
+                let time_after_reading_payload_length = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                    "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading payload length) took {} milliseconds",
+                    time_after_reading_payload_length
+                        .duration_since(time_before_reading_payload_length)
+                        .unwrap()
+                        .as_millis()
+                );
+                }
+
+                let time_before_reading_payload = SystemTime::now();
 
                 let payload = u64::from_be_bytes(
                     machine
@@ -680,6 +1203,18 @@ pub async fn execute(
                         .try_into()
                         .unwrap(),
                 );
+
+                let time_after_reading_payload = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                    "read_memory(MACHINE_IO_ADDRESSS + 16, payload_length)(reading payload) took {} milliseconds",
+                    time_after_reading_payload
+                        .duration_since(time_before_reading_payload)
+                        .unwrap()
+                        .as_millis()
+                );
+                }
+
                 tracing::info!("hint payload {:?}", payload);
             }
             // Handles the GET_METADATA action:
@@ -692,6 +1227,8 @@ pub async fn execute(
             // Unavailable metadata should kill the machine, data requested by machine is assumed to be available.
             GET_METADATA => {
                 tracing::info!("GET_METADATA");
+                let time_before_reading_metadata_key_length = SystemTime::now();
+
                 let length = u64::from_be_bytes(
                     machine
                         .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
@@ -700,17 +1237,40 @@ pub async fn execute(
                         .try_into()
                         .unwrap(),
                 );
+                let time_after_reading_metadata_key_length = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                    "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading metadata key length) took {} milliseconds",
+                    time_after_reading_metadata_key_length
+                        .duration_since(time_before_reading_metadata_key_length)
+                        .unwrap()
+                        .as_millis()
+                );
+                }
+
+                let time_before_reading_metadata_key = SystemTime::now();
 
                 let metadata_key = machine
                     .read_memory(MACHINE_IO_ADDRESSS + 16, length)
                     .await
                     .unwrap();
 
+                let time_after_reading_metadata_key = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                    "read_memory(MACHINE_IO_ADDRESSS + 16, length)(reading metadata key) took {} milliseconds",
+                    time_after_reading_metadata_key
+                        .duration_since(time_before_reading_metadata_key)
+                        .unwrap()
+                        .as_millis()
+                );
+                }
+
                 tracing::info!("read metadata: {:?}", hex::encode(metadata_key.clone()));
 
                 let metadata_result = metadata.get(&metadata_key).unwrap(); // handle this a bit better
                 tracing::info!("metadata len {:?}", metadata_result.len());
-
+                let time_before_writing_metadata = SystemTime::now();
                 machine
                     .write_memory(
                         MACHINE_IO_ADDRESSS + 16,
@@ -718,6 +1278,18 @@ pub async fn execute(
                     )
                     .await
                     .unwrap();
+                let time_after_writing_metadata = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                    "write_memory(MACHINE_IO_ADDRESSS + 16, STANDARD.encode(metadata_result.clone()))(writing encoded metadata) took {} milliseconds",
+                    time_after_writing_metadata
+                        .duration_since(time_before_writing_metadata)
+                        .unwrap()
+                        .as_millis()
+                );
+                }
+
+                let time_before_writing_metadata_length = SystemTime::now();
                 machine
                     .write_memory(
                         MACHINE_IO_ADDRESSS,
@@ -725,6 +1297,16 @@ pub async fn execute(
                     )
                     .await
                     .unwrap();
+                let time_after_writing_metadata_length = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                    "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(metadata_result.len().to_be_bytes().to_vec()))(writing encoded metadata length) took {} milliseconds",
+                    time_after_writing_metadata_length
+                        .duration_since(time_before_writing_metadata_length)
+                        .unwrap()
+                        .as_millis()
+                );
+                }
                 tracing::info!("metadata info was written");
             }
             _ => {
@@ -735,8 +1317,32 @@ pub async fn execute(
         // We should basically not get here in a well-behaved app, it should FINISH (accept/reject), EXCEPTION
         if interpreter_break_reason == Value::String("halted".to_string()) {
             tracing::info!("halted");
+            let before_destroying_machine = SystemTime::now();
             machine.destroy().await.unwrap();
+            let after_destroying_machine = SystemTime::now();
+            if measure_execution_time {
+                tracing::info!(
+                    "destroying machine took {} milliseconds",
+                    after_destroying_machine
+                        .duration_since(before_destroying_machine)
+                        .unwrap()
+                        .as_millis()
+                );
+            }
+
+            let before_shutting_down_machine = SystemTime::now();
             machine.shutdown().await.unwrap();
+            let after_shutting_down_machine = SystemTime::now();
+            if measure_execution_time {
+                tracing::info!(
+                    "shutting down machine took {} milliseconds",
+                    after_shutting_down_machine
+                        .duration_since(before_shutting_down_machine)
+                        .unwrap()
+                        .as_millis()
+                );
+            }
+
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "machine halted without finishing, exception",
@@ -744,29 +1350,84 @@ pub async fn execute(
         }
         if interpreter_break_reason == Value::String("reached_target_mcycle".to_string()) {
             tracing::info!("reached cycles limit before completion of execution");
+            let before_destroying_machine = SystemTime::now();
             machine.destroy().await.unwrap();
+            let after_destroying_machine = SystemTime::now();
+            if measure_execution_time {
+                tracing::info!(
+                    "destroying machine took {} milliseconds",
+                    after_destroying_machine
+                        .duration_since(before_destroying_machine)
+                        .unwrap()
+                        .as_millis()
+                );
+            }
+
+            let before_shutting_down_machine = SystemTime::now();
             machine.shutdown().await.unwrap();
+            let after_shutting_down_machine = SystemTime::now();
+            if measure_execution_time {
+                tracing::info!(
+                    "shutting down machine took {} milliseconds",
+                    after_shutting_down_machine
+                        .duration_since(before_shutting_down_machine)
+                        .unwrap()
+                        .as_millis()
+                );
+            }
+
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "reached cycles limit before completion of execution",
             ));
         }
+        let time_before_resetting_iflags_y = SystemTime::now();
         // After handling the operation, we clear the yield flag and loop back and continue execution of machine
         machine.reset_iflags_y().await.unwrap();
+        let time_after_resetting_iflags_y = SystemTime::now();
+        if measure_execution_time {
+            tracing::info!(
+                "iflags y resetting took {} milliseconds",
+                time_after_resetting_iflags_y
+                    .duration_since(time_before_resetting_iflags_y)
+                    .unwrap()
+                    .as_millis()
+            );
+        }
     }
 }
 
 async fn dedup_download_directory(ipfs_url: &str, directory_cid: Cid, out_file_path: String) {
+    let mut measure_execution_time = false;
+    if cfg!(feature = "measure_execution_time") {
+        measure_execution_time = true;
+    }
     let ipfs_client = IpfsClient::from_str(ipfs_url).unwrap();
+
+    let before_ls_cid = SystemTime::now();
     let res = ipfs_client
         .ls(format!("/ipfs/{}", directory_cid.to_string()).as_str())
         .await
         .unwrap();
+    let after_ls_cid = SystemTime::now();
+    if measure_execution_time {
+        tracing::info!(
+            "ls(/ipfs/{}) took {} milliseconds",
+            directory_cid.to_string(),
+            after_ls_cid
+                .duration_since(before_ls_cid)
+                .unwrap()
+                .as_millis()
+        );
+    }
+
     let first_object = res.objects.first().unwrap();
 
     std::fs::create_dir_all(out_file_path.clone()).unwrap();
 
     for val in &first_object.links {
+        let before_dag_request = SystemTime::now();
+
         let req = Request::builder()
             .method("POST")
             .uri(format!("{}/api/v0/dag/export?arg={}", ipfs_url, val.hash))
@@ -785,7 +1446,6 @@ async fn dedup_download_directory(ipfs_url: &str, directory_cid: Cid, out_file_p
                         })
                     })
                     .into_async_read();
-
                 let mut out = async_std::fs::OpenOptions::new()
                     .read(true)
                     .write(true)
@@ -800,12 +1460,35 @@ async fn dedup_download_directory(ipfs_url: &str, directory_cid: Cid, out_file_p
                     out_file_path,
                     val.name.clone()
                 );
+                let before_reading_single_file_seek = SystemTime::now();
 
                 read_single_file_seek(&mut f, &mut out, None).await.unwrap();
+                let after_reading_single_file_seek = SystemTime::now();
+                if measure_execution_time {
+                    tracing::info!(
+                        "read_single_file_seek took {} milliseconds",
+                        after_reading_single_file_seek
+                            .duration_since(before_reading_single_file_seek)
+                            .unwrap()
+                            .as_millis()
+                    );
+                }
             }
             Err(er) => {
                 println!("{}", er.to_string());
             }
+        }
+        let after_dag_request = SystemTime::now();
+        if measure_execution_time {
+            tracing::info!(
+                "{}/api/v0/dag/export?arg={} request handling took {} milliseconds",
+                ipfs_url,
+                val.hash,
+                after_dag_request
+                    .duration_since(before_dag_request)
+                    .unwrap()
+                    .as_millis()
+            );
         }
     }
 }
