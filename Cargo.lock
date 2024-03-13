@@ -1466,6 +1466,7 @@ dependencies = [
  "rs-car-ipfs",
  "sequencer",
  "serde_json",
+ "sha2 0.10.8",
  "sqlite",
  "tokio",
  "tracing",

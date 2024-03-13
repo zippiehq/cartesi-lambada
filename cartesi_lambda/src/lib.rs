@@ -2,6 +2,7 @@ use async_std::stream::StreamExt;
 use futures::TryStreamExt;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 
+use async_std::sync::Mutex;
 use async_std::task;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -10,11 +11,12 @@ use cid::Cid;
 use hyper::Request;
 use rs_car_ipfs::single_file::read_single_file_seek;
 use serde_json::Value;
+use sha2::Digest;
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::{thread, time::SystemTime};
-
 // How we communicate between host (this) and guest (the cartesi machine) is through read-writing the second flash drive
 // which is placed in memory at MACHINE_IO_ADDRESSS. Special care is needed on machine side to flush/ignore OS caches until PMEM/DAX comes around.
 //
@@ -54,6 +56,10 @@ const HINT: u64 = 0x00007;
 // get metadata by 32-byte hash
 const GET_METADATA: u64 = 0x00008;
 
+const SPAWN_COMPUTE: u64 = 0x0000A;
+
+const JOIN_COMPUTE: u64 = 0x0000B;
+
 // execute is the entry point for the computation to be done, we have a particular state CID with it's associated /app directory
 // and a transaction payload + metadata and we want to do this computation and get the new state CID back or an error
 pub async fn execute(
@@ -65,6 +71,8 @@ pub async fn execute(
     metadata: HashMap<Vec<u8>, Vec<u8>>,
     max_cycles_input: Option<u64>,
 ) -> Result<Cid, std::io::Error> {
+    let mut thread_execute: HashMap<Vec<u8>, thread::JoinHandle<Result<Cid, std::io::Error>>> =
+        HashMap::<Vec<u8>, thread::JoinHandle<Result<Cid, std::io::Error>>>::new();
     tracing::info!("state cid {:?}", state_cid.to_string());
     let time_before_receive_app_cid = SystemTime::now();
     let mut measure_execution_time = false;
@@ -160,7 +168,9 @@ pub async fn execute(
     tracing::info!("execute");
 
     // connect to a Cartesi Machine - we expect this to be an forked, empty machine and we control when it's shut down
-    let machine = JsonRpcCartesiMachineClient::new(machine_url).await.unwrap();
+    let machine = JsonRpcCartesiMachineClient::new(machine_url.clone())
+        .await
+        .unwrap();
 
     // The current state of the machine (0 = base image loaded, base image initialized (LOAD_APP), 1 = app initialized (LOAD_TX), 2 = processing a tx (should end in FINISH/EXCEPTION))
     let mut machine_loaded_state = 0;
@@ -1309,6 +1319,183 @@ pub async fn execute(
                 }
                 tracing::info!("metadata info was written");
             }
+            SPAWN_COMPUTE => {
+                let length = u64::from_be_bytes(
+                    machine
+                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
+                        .await
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                );
+
+                let cid_bytes = machine
+                    .read_memory(MACHINE_IO_ADDRESSS + 16, length)
+                    .await
+                    .unwrap();
+                let cid = Cid::try_from(cid_bytes.clone()).unwrap();
+
+                let payload_length = u64::from_be_bytes(
+                    machine
+                        .read_memory(MACHINE_IO_ADDRESSS + 16 + length, 8)
+                        .await
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                );
+
+                let payload = machine
+                    .read_memory(MACHINE_IO_ADDRESSS + 24 + length, payload_length)
+                    .await
+                    .unwrap();
+                let ipfs_url = Arc::new(Mutex::new(ipfs_url.to_string()));
+                let ipfs_write_url = Arc::new(Mutex::new(ipfs_write_url.to_string()));
+                let machine_url = Arc::new(Mutex::new(machine_url.clone()));
+
+                let mut hasher = Sha256::new();
+                hasher.update(cid_bytes);
+                hasher.update(payload.clone());
+                let thread_hash = hasher.finalize().to_vec();
+
+                thread_execute.insert(
+                    thread_hash,
+                    thread::spawn(move || {
+                        let ipfs_url = Arc::clone(&ipfs_url);
+                        let ipfs_write_url = Arc::clone(&ipfs_write_url);
+                        let machine_url = Arc::clone(&machine_url);
+
+                        task::block_on(async {
+                            let mut metadata: HashMap<Vec<u8>, Vec<u8>> =
+                                HashMap::<Vec<u8>, Vec<u8>>::new();
+
+                            metadata.insert(
+                                calculate_sha256("sequencer".as_bytes()),
+                                calculate_sha256("spawn".as_bytes()),
+                            );
+                            execute(
+                                machine_url.lock().await.clone(),
+                                ipfs_url.lock().await.clone().as_str(),
+                                ipfs_write_url.lock().await.clone().as_str(),
+                                Some(payload),
+                                cid,
+                                metadata,
+                                max_cycles_input,
+                            )
+                            .await
+                        })
+                    }),
+                );
+            }
+            JOIN_COMPUTE => {
+                let length = u64::from_be_bytes(
+                    machine
+                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
+                        .await
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                );
+
+                let cid_bytes = machine
+                    .read_memory(MACHINE_IO_ADDRESSS + 16, length)
+                    .await
+                    .unwrap();
+                let cid = Cid::try_from(cid_bytes.clone()).unwrap();
+
+                let payload_length = u64::from_be_bytes(
+                    machine
+                        .read_memory(MACHINE_IO_ADDRESSS + 16 + length, 8)
+                        .await
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                );
+
+                let payload = machine
+                    .read_memory(MACHINE_IO_ADDRESSS + 24 + length, payload_length)
+                    .await
+                    .unwrap();
+                let ipfs_url = Arc::new(Mutex::new(ipfs_url.to_string()));
+                let ipfs_write_url = Arc::new(Mutex::new(ipfs_write_url.to_string()));
+                let machine_url = Arc::new(Mutex::new(machine_url.clone()));
+
+                let mut hasher = Sha256::new();
+                hasher.update(cid_bytes);
+                hasher.update(payload.clone());
+                let thread_hash = hasher.finalize().to_vec();
+
+                let mut execute_result = None;
+                if let Some(thread) = thread_execute.remove(&thread_hash) {
+                    execute_result = Some(thread.join().unwrap());
+                } else {
+                    execute_result = Some(
+                        thread::spawn(move || {
+                            let ipfs_url = Arc::clone(&ipfs_url);
+                            let ipfs_write_url = Arc::clone(&ipfs_write_url);
+                            let machine_url = Arc::clone(&machine_url);
+
+                            task::block_on(async {
+                                let mut metadata: HashMap<Vec<u8>, Vec<u8>> =
+                                    HashMap::<Vec<u8>, Vec<u8>>::new();
+
+                                metadata.insert(
+                                    calculate_sha256("sequencer".as_bytes()),
+                                    calculate_sha256("spawn".as_bytes()),
+                                );
+                                execute(
+                                    machine_url.lock().await.clone(),
+                                    ipfs_url.lock().await.clone().as_str(),
+                                    ipfs_write_url.lock().await.clone().as_str(),
+                                    Some(payload),
+                                    cid,
+                                    metadata,
+                                    max_cycles_input,
+                                )
+                                .await
+                            })
+                        })
+                        .join()
+                        .unwrap(),
+                    )
+                }
+
+                match execute_result.unwrap() {
+                    Ok(cid) => {
+                        machine
+                            .write_memory(
+                                MACHINE_IO_ADDRESSS + 8,
+                                STANDARD.encode(0_u64.to_be_bytes()),
+                            )
+                            .await
+                            .unwrap();
+
+                        machine
+                            .write_memory(
+                                MACHINE_IO_ADDRESSS + 16,
+                                STANDARD.encode(cid.clone().to_bytes().len().to_be_bytes()),
+                            )
+                            .await
+                            .unwrap();
+
+                        machine
+                            .write_memory(
+                                MACHINE_IO_ADDRESSS + 24,
+                                STANDARD.encode(cid.clone().to_bytes()),
+                            )
+                            .await
+                            .unwrap();
+                    }
+                    Err(_) => {
+                        machine
+                            .write_memory(
+                                MACHINE_IO_ADDRESSS + 8,
+                                STANDARD.encode(1_u64.to_be_bytes()),
+                            )
+                            .await
+                            .unwrap();
+                    }
+                }
+            }
             _ => {
                 // XXX this should be a fatal error
                 tracing::info!("unknown opt {:?}", opt)
@@ -1491,4 +1678,10 @@ async fn dedup_download_directory(ipfs_url: &str, directory_cid: Cid, out_file_p
             );
         }
     }
+}
+
+pub fn calculate_sha256(input: &[u8]) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(input);
+    hasher.finalize().to_vec()
 }
