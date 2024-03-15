@@ -12,7 +12,7 @@ ipfs-api-backend-hyper = { version = "0.6.0", features = ["with-send-sync"], def
 hyper = { version = "0.14", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3.28"
-cartesi-machine-json-rpc = {git = "https://github.com/cartesi/machine-json-rpc" }
+cartesi-machine = { git = "https://github.com/cartesi/dave", branch = "feature/uarch-reset" }
 serde_json = "1.0.100"
 futures = "0.3.28"
 async-std = { version = "1.12", features = ["attributes", "tokio1" ] }
