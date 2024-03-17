@@ -458,6 +458,8 @@ async fn subscribe_espresso(
                 let block: BlockQueryData<SeqTypes> = block;
                 let payload = block.payload();
 
+                let espresso_tx_namespace = chain_vm_id.to_be_bytes().to_vec();
+                let mut espresso_tx_number: u64 = 0;
                 let proof = payload.get_namespace_proof(VmId::from(chain_vm_id));
                 let transactions = proof.get_namespace_leaves();
 
@@ -504,6 +506,16 @@ async fn subscribe_espresso(
                     // We've not processed this block before, so let's process it (can we even end here since we set starting point?)
                     if state == State::Done {
                         for (_, tx) in transactions.into_iter().enumerate() {
+                            let mut tx_metadata = metadata.clone();
+                            tx_metadata.insert(
+                                calculate_sha256("espresso-tx-number".as_bytes()),
+                                espresso_tx_number.to_be_bytes().to_vec(),
+                            );
+                            tx_metadata.insert(
+                                calculate_sha256("espresso-tx-namespace".as_bytes()),
+                                espresso_tx_namespace.clone(),
+                            );
+
                             tracing::info!("tx.payload().len: {:?}", tx.payload().len());
 
                             handle_tx(
@@ -511,12 +523,14 @@ async fn subscribe_espresso(
                                 opt.clone(),
                                 Some(tx.payload().to_vec()),
                                 current_cid,
-                                metadata.clone(),
+                                tx_metadata,
                                 height,
                                 genesis_cid_text.clone(),
                                 rx.clone(),
                             )
                             .await;
+
+                            espresso_tx_number += 1;
                         }
                     }
 
