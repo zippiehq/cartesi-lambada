@@ -1,3 +1,4 @@
+use ark_serialize::CanonicalSerialize;
 use sha2::Digest;
 use sha2::Sha256;
 use surf_disco::Url;
@@ -458,6 +459,9 @@ async fn subscribe_espresso(
                 let block: BlockQueryData<SeqTypes> = block;
                 let payload = block.payload();
 
+                let block_timestamp: u64 = block.header().timestamp;
+                let espresso_block_timestamp = block_timestamp.to_be_bytes().to_vec();
+
                 let espresso_tx_namespace = chain_vm_id.to_be_bytes().to_vec();
                 let mut espresso_tx_number: u64 = 0;
                 let proof = payload.get_namespace_proof(VmId::from(chain_vm_id));
@@ -472,7 +476,14 @@ async fn subscribe_espresso(
                     calculate_sha256("espresso-block-height".as_bytes()),
                     block.height().to_be_bytes().to_vec(),
                 );
+                metadata.insert(
+                    calculate_sha256("espresso-block-timestamp".as_bytes()),
+                    espresso_block_timestamp,
+                );
 
+                let mut bytes = Vec::new();
+                block.hash().serialize_uncompressed(&mut bytes).unwrap();
+                metadata.insert(calculate_sha256("espresso-block-hash".as_bytes()), bytes);
                 if let Some(info) = block.header().l1_finalized {
                     metadata.insert(
                         calculate_sha256("espresso-l1-block-height".as_bytes()),
