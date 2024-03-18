@@ -41,9 +41,11 @@ COPY ./cartesi-build.sh /usr/bin/cartesi-build
 COPY ./wait-for-callback.pl /usr/bin/wait-for-callback.pl
 RUN chmod +x /usr/bin/cartesi-build
 COPY ./entrypoint-devkit.sh /entrypoint-devkit.sh
+COPY ./install-devkit.sh /install-devkit.sh
 COPY ./entrypoint.sh /entrypoint-lambada.sh
 COPY ./sample /sample
 ARG DEVKIT=-lambada
+RUN if [ x$DEVKIT = x-devkit ]; then bash /install-devkit.sh; fi
 RUN cp /entrypoint$DEVKIT.sh /entrypoint.sh
 RUN mkdir -p /data
 
