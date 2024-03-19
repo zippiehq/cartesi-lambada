@@ -595,6 +595,8 @@ async fn subscribe_celestia(
     } else {
         current_height
     };
+    let celestia_tx_namespace = chain_vm_id.to_be_bytes().to_vec();
+    let celestia_tx_count: u64 = 0;
     match client.header_wait_for_height(current_height).await {
         Ok(_) => {
             let mut state = client.header_sync_state().await.unwrap();
@@ -642,13 +644,22 @@ async fn subscribe_celestia(
                             // We've not processed this block before, so let's process it (can we even end here since we set starting point?)
                             if statement_state == State::Done {
                                 for blob in blobs {
+                                    let mut tx_metadata = metadata.clone();
+                                    tx_metadata.insert(
+                                        calculate_sha256("ecelestia-tx-count".as_bytes()),
+                                        celestia_tx_count.to_be_bytes().to_vec(),
+                                    );
+                                    tx_metadata.insert(
+                                        calculate_sha256("celestia-tx-namespace".as_bytes()),
+                                        celestia_tx_namespace.clone(),
+                                    );
                                     tracing::info!("new blob {:?}", blob);
                                     handle_tx(
                                         &machine,
                                         opt.clone(),
                                         Some(blob.data),
                                         current_cid,
-                                        metadata.clone(),
+                                        tx_metadata,
                                         state.height,
                                         genesis_cid_text.clone(),
                                         rx.clone(),
