@@ -1,5 +1,9 @@
 use async_std::stream::StreamExt;
 use futures::TryStreamExt;
+use hyper::body::to_bytes;
+use hyper::{header, Body, Client, HeaderMap, Method, Request, Response, Server};
+use hyper::{StatusCode, Uri};
+use hyper_tls::HttpsConnector;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 
 use async_std::sync::Mutex;
@@ -8,7 +12,6 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use cartesi_machine_json_rpc::client::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
 use cid::Cid;
-use hyper::Request;
 use rs_car_ipfs::single_file::read_single_file_seek;
 use serde_json::Value;
 use sha2::Digest;
@@ -52,6 +55,12 @@ const LOAD_APP: u64 = 0x00006;
 
 // make a hint that we're expecting certain IPFS hashes to be available (for example all hashes from ethereum block X), null-op in arbitration
 const HINT: u64 = 0x00007;
+
+// retrieve from a data source
+
+const GET_DATA: u64 = 0x00009;
+
+const NAMESPACE_KECCAK256: u64 = 0x2;
 
 // get metadata by 32-byte hash
 const GET_METADATA: u64 = 0x00008;
@@ -1205,14 +1214,12 @@ pub async fn execute(
 
                 let time_before_reading_payload = SystemTime::now();
 
-                let payload = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 16, payload_length)
-                        .await
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
+                let payload: Vec<u8> = machine
+                    .read_memory(MACHINE_IO_ADDRESSS + 16, payload_length)
+                    .await
+                    .unwrap()
+                    .try_into()
+                    .unwrap();
 
                 let time_after_reading_payload = SystemTime::now();
                 if measure_execution_time {
@@ -1226,6 +1233,24 @@ pub async fn execute(
                 }
 
                 tracing::info!("hint payload {:?}", payload);
+                // XXX we send hint to the KECCAK256_SOURCE for now
+                let https = HttpsConnector::new();
+                let client = Client::builder().build::<_, hyper::Body>(https);
+
+                let uri: String = format!(
+                    "{}/hint/{}",
+                    std::env::var("KECCAK256_SOURCE").unwrap(),
+                    str::replace(std::str::from_utf8(&payload.clone()).unwrap(), " ", "%20")
+                )
+                .parse()
+                .unwrap();
+
+                let block_req = Request::builder()
+                    .method("GET")
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap();
+                client.request(block_req).await.unwrap();
             }
             // Handles the GET_METADATA action:
             // 1. Reads a 64-bit value from the specified memory address (MACHINE_IO_ADDRESSS + 8) and converts it from big-endian to a u64, representing the length of a metadata key
@@ -1319,6 +1344,7 @@ pub async fn execute(
                 }
                 tracing::info!("metadata info was written");
             }
+
             SPAWN_COMPUTE => {
                 let length = u64::from_be_bytes(
                     machine
@@ -1494,6 +1520,67 @@ pub async fn execute(
                             .await
                             .unwrap();
                     }
+                }
+            }
+            GET_DATA => {
+                tracing::info!("GET_DATA");
+                let namespace = u64::from_be_bytes(
+                    machine
+                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
+                        .await
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                );
+                let id_length = u64::from_be_bytes(
+                    machine
+                        .read_memory(MACHINE_IO_ADDRESSS + 16, 8)
+                        .await
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                );
+                let id = machine
+                    .read_memory(MACHINE_IO_ADDRESSS + 24, id_length)
+                    .await
+                    .unwrap();
+
+                if namespace == NAMESPACE_KECCAK256 {
+                    let https = HttpsConnector::new();
+                    let client = Client::builder().build::<_, hyper::Body>(https);
+
+                    // XXX this is bad
+                    let uri: String = format!(
+                        "{}/dehash/{}",
+                        std::env::var("KECCAK256_SOURCE").unwrap(),
+                        std::str::from_utf8(id.as_slice()).unwrap()
+                    )
+                    .parse()
+                    .unwrap();
+
+                    let block_req = Request::builder()
+                        .method("GET")
+                        .uri(uri)
+                        .body(Body::empty())
+                        .unwrap();
+                    let block_response = client.request(block_req).await.unwrap();
+                    let body_bytes = hyper::body::to_bytes(block_response).await.unwrap();
+                    machine
+                        .write_memory(
+                            MACHINE_IO_ADDRESSS + 16,
+                            STANDARD.encode(body_bytes.clone()),
+                        )
+                        .await
+                        .unwrap();
+                    machine
+                        .write_memory(
+                            MACHINE_IO_ADDRESSS,
+                            STANDARD.encode(body_bytes.len().to_be_bytes().to_vec()),
+                        )
+                        .await
+                        .unwrap();
+                } else {
+                    panic!("unknown namespace");
                 }
             }
             _ => {
