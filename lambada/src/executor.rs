@@ -1,4 +1,5 @@
 use ark_serialize::CanonicalSerialize;
+use ethers::prelude::*;
 use sha2::Digest;
 use sha2::Sha256;
 use surf_disco::Url;
@@ -12,6 +13,7 @@ use cartesi_machine_json_rpc::client::JsonRpcCartesiMachineClient;
 use celestia_rpc::{BlobClient, HeaderClient};
 use celestia_types::nmt::Namespace;
 use cid::Cid;
+use ethers::types::{BlockId, BlockNumber, H256, U256};
 use futures_util::TryStreamExt;
 use hotshot_query_service::availability::BlockQueryData;
 use hyper::Uri;
@@ -22,12 +24,17 @@ use sequencer::{SeqTypes, VmId};
 use serde::{Deserialize, Serialize};
 use sqlite::State;
 use std::collections::HashMap;
+use std::env;
+use std::str::FromStr;
 use std::sync::mpsc::Receiver;
 use std::thread;
+use std::time::Duration;
 use std::{
     sync::{Arc, Mutex},
     time::SystemTime,
 };
+use tokio::time::sleep;
+
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;
 #[derive(Clone, Debug)]
 pub struct ExecutorOptions {
@@ -37,6 +44,7 @@ pub struct ExecutorOptions {
     pub ipfs_write_url: String,
     pub db_path: String,
     pub callback_node_info: Option<(Uri, String, String)>,
+    pub evm_da_url: String,
 }
 
 pub async fn subscribe(
@@ -49,8 +57,6 @@ pub async fn subscribe(
     let mut current_cid = appchain.clone();
     let genesis_cid_text = current_cid.to_string();
     let mut current_height: u64 = u64::MAX;
-    let espresso_testnet_sequencer_url = opt.espresso_testnet_sequencer_url.clone();
-    let celestia_testnet_sequencer_url = opt.celestia_testnet_sequencer_url.clone();
     let machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url)
         .await
         .unwrap();
@@ -157,16 +163,14 @@ pub async fn subscribe(
             .parse::<u64>()
             .unwrap();
 
-        let chain_vm_id: u64 = chain_info
+        let chain_vm_id = chain_info
             .get("sequencer")
             .unwrap()
             .get("vm-id")
             .unwrap()
             .as_str()
             .unwrap()
-            .parse::<u64>()
-            .unwrap();
-
+            .to_string();
         if current_height == u64::MAX {
             current_height = starting_block_height;
         }
@@ -194,7 +198,6 @@ pub async fn subscribe(
 
                 subscribe_espresso(
                     &machine,
-                    espresso_testnet_sequencer_url.as_str(),
                     current_height,
                     opt.clone(),
                     &mut current_cid,
@@ -210,7 +213,6 @@ pub async fn subscribe(
 
                 subscribe_celestia(
                     &machine,
-                    celestia_testnet_sequencer_url.clone(),
                     current_height,
                     chain_info_cid,
                     opt.clone(),
@@ -221,9 +223,20 @@ pub async fn subscribe(
                 )
                 .await;
             }
-            _ => {
-                tracing::info!("unknown sequencer type");
+
+            "evm-da" => {
+                subscribe_evm_da(
+                    &machine,
+                    starting_block_height,
+                    opt.clone(),
+                    &mut current_cid,
+                    genesis_cid_text.clone(), // recheck
+                    rx.clone(),
+                    chain_vm_id,
+                )
+                .await;
             }
+            _ => tracing::info!("Unknown sequencer type: {}", r#type),
         }
     }
 }
@@ -425,16 +438,15 @@ async fn is_chain_info_same(
 
 async fn subscribe_espresso(
     machine: &JsonRpcCartesiMachineClient,
-    sequencer_url: &str,
     current_height: u64,
     opt: ExecutorOptions,
     current_cid: &mut Cid,
     current_chain_info_cid: Arc<Mutex<Option<Cid>>>,
-    chain_vm_id: u64,
+    chain_vm_id: String,
     genesis_cid_text: String,
     rx: Option<Arc<async_std::sync::Mutex<Receiver<(u64, Option<String>)>>>>,
 ) {
-    let query_service_url = Url::parse(&sequencer_url)
+    let query_service_url = Url::parse(&opt.espresso_testnet_sequencer_url)
         .unwrap()
         .join("availability")
         .unwrap();
@@ -462,9 +474,10 @@ async fn subscribe_espresso(
                 let block_timestamp: u64 = block.header().timestamp;
                 let espresso_block_timestamp = block_timestamp.to_be_bytes().to_vec();
 
-                let espresso_tx_namespace = chain_vm_id.to_be_bytes().to_vec();
+                let espresso_tx_namespace = chain_vm_id.to_string();
                 let mut espresso_tx_number: u64 = 0;
-                let proof = payload.get_namespace_proof(VmId::from(chain_vm_id));
+                let vm_id: u64 = chain_vm_id.parse().expect("vm-id should be a valid u64");
+                let proof = payload.get_namespace_proof(VmId::from(vm_id));
                 let transactions = proof.get_namespace_leaves();
 
                 let mut metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::<Vec<u8>, Vec<u8>>::new();
@@ -524,7 +537,7 @@ async fn subscribe_espresso(
                             );
                             tx_metadata.insert(
                                 calculate_sha256("espresso-tx-namespace".as_bytes()),
-                                espresso_tx_namespace.clone(),
+                                espresso_tx_namespace.clone().into(),
                             );
 
                             tracing::info!("tx.payload().len: {:?}", tx.payload().len());
@@ -574,12 +587,11 @@ async fn subscribe_espresso(
 }
 async fn subscribe_celestia(
     machine: &JsonRpcCartesiMachineClient,
-    sequencer_url: String,
     current_height: u64,
     current_chain_info_cid: Arc<Mutex<Option<cid::CidGeneric<64>>>>,
     opt: ExecutorOptions,
     current_cid: &mut Cid,
-    chain_vm_id: u64,
+    chain_vm_id: String,
     genesis_cid_text: String,
     rx: Option<Arc<async_std::sync::Mutex<Receiver<(u64, Option<String>)>>>>,
 ) {
@@ -587,15 +599,17 @@ async fn subscribe_celestia(
         Ok(token) => token,
         Err(_) => return,
     };
-    let client = celestia_rpc::Client::new(sequencer_url.as_str(), Some(token.as_str()))
-        .await
-        .unwrap();
+    let client =
+        celestia_rpc::Client::new(&opt.celestia_testnet_sequencer_url, Some(token.as_str()))
+            .await
+            .unwrap();
     let current_height = if current_height == 0 {
         1
     } else {
         current_height
     };
-    let celestia_tx_namespace = chain_vm_id.to_be_bytes().to_vec();
+    let chain_vm_id_num: u64 = chain_vm_id.parse::<u64>().expect("VM ID as u64");
+    let celestia_tx_namespace = chain_vm_id_num.to_be_bytes().to_vec();
     let celestia_tx_count: u64 = 0;
     match client.header_wait_for_height(current_height).await {
         Ok(_) => {
@@ -613,7 +627,7 @@ async fn subscribe_celestia(
                 match client
                     .blob_get_all(
                         state.height,
-                        &[Namespace::new_v0(&chain_vm_id.to_be_bytes()).unwrap()],
+                        &[Namespace::new_v0(&chain_vm_id.as_bytes()).unwrap()],
                     )
                     .await
                 {
@@ -696,6 +710,91 @@ async fn subscribe_celestia(
         Err(e) => {
             tracing::info!("Error: {:?}", e);
         }
+    }
+}
+async fn subscribe_evm_da(
+    machine: &JsonRpcCartesiMachineClient,
+    starting_block_height: u64,
+    opt: ExecutorOptions,
+    current_cid: &mut Cid,
+    genesis_cid_text: String,
+    rx: Option<Arc<async_std::sync::Mutex<Receiver<(u64, Option<String>)>>>>,
+    chain_vm_id: String,
+) {
+    let eth_rpc_url = opt.evm_da_url.clone();
+    let eth_client = Arc::new(
+        ethers::providers::Provider::<ethers::providers::Http>::try_from(&eth_rpc_url)
+            .expect("Could not instantiate Ethereum HTTP Provider"),
+    );
+    let namespace = chain_vm_id;
+    let namespace_address =
+        ethers::types::Address::from_str(&namespace).expect("Invalid namespace address");
+    let mut current_height = starting_block_height;
+
+    while current_height < u64::MAX {
+        let latest_block = eth_client
+            .get_block_number()
+            .await
+            .expect("Failed to fetch the latest block number");
+        tracing::info!(
+            "EVM-DA: latest block {} current height {}",
+            latest_block,
+            current_height
+        );
+
+        if latest_block < current_height.into() {
+            tracing::info!(
+                "Waiting for block number {} to be available. Current latest block number: {}",
+                current_height,
+                latest_block
+            );
+            sleep(Duration::from_secs(2)).await;
+            continue;
+        }
+
+        let block = eth_client
+            .get_block_with_txs(BlockId::Number(BlockNumber::Number(current_height.into())))
+            .await
+            .expect("Failed to fetch block")
+            .expect("Block not found");
+
+        for tx in &block.transactions {
+            if let Some(to_address) = tx.to {
+                if to_address == namespace_address {
+                    let call_data = tx.input.clone();
+                    let tx_hash = tx.hash;
+                    tracing::info!("tx {:?}", tx);
+                    let mut metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+                    metadata.insert(b"sequencer".to_vec(), b"evm-da".to_vec());
+                    metadata.insert(
+                        b"ethereum-block-height".to_vec(),
+                        current_height.to_string().as_bytes().to_vec(),
+                    );
+                    metadata.insert(
+                        b"ethereum-block-hash".to_vec(),
+                        format!("{:?}", block.hash).as_bytes().to_vec(),
+                    );
+                    metadata.insert(
+                        b"ethereum-tx-hash".to_vec(),
+                        format!("{:?}", tx_hash).as_bytes().to_vec(),
+                    );
+
+                    handle_tx(
+                        machine,
+                        opt.clone(),
+                        Some(call_data.to_vec()),
+                        current_cid,
+                        metadata,
+                        current_height,
+                        genesis_cid_text.clone(),
+                        rx.clone(),
+                    )
+                    .await;
+                }
+            }
+        }
+
+        current_height += 1;
     }
 }
 

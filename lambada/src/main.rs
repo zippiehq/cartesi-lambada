@@ -46,6 +46,7 @@ async fn start_subscriber(
         ipfs_write_url: options.ipfs_write_url.clone(),
         db_path: options.db_path.clone(),
         callback_node_info: callback_node_info,
+        evm_da_url: options.evm_da_url.clone(),
     };
     let cartesi_machine_url = options.cartesi_machine_url.to_string().clone();
 
