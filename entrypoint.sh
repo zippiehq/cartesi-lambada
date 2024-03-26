@@ -79,5 +79,5 @@ RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --espresso-testnet-sequencer-url 
 	--machine-dir=/data/base-machines/lambada-base-machine \
 	--ipfs-url $IPFS_URL \
 	--cartesi-machine-url $CARTESI_MACHINE_URL \
-	--db-path /data/db/  2>&1 > /tmp/lambada.log
+	--db-path /data/db/
 	

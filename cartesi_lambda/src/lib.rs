@@ -1,23 +1,29 @@
 use async_std::stream::StreamExt;
-use futures::TryStreamExt;
-use hyper::body::to_bytes;
-use hyper::{header, Body, Client, HeaderMap, Method, Request, Response, Server};
-use hyper::{StatusCode, Uri};
-use hyper_tls::HttpsConnector;
-use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
-
 use async_std::sync::Mutex;
 use async_std::task;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use cartesi_machine_json_rpc::client::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
 use cid::Cid;
+use futures::TryStreamExt;
+use hyper::body::to_bytes;
+use hyper::{header, Body, Client, HeaderMap, Method, Request, Response, Server};
+use hyper::{StatusCode, Uri};
+use hyper_tls::HttpsConnector;
+use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use rs_car_ipfs::single_file::read_single_file_seek;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
 use std::collections::HashMap;
 use std::io::Cursor;
+use std::io::Stderr;
+use std::io::Stdout;
+use std::io::Write;
+use std::process::Command;
+use std::process::Stdio;
+use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::{thread, time::SystemTime};
 // How we communicate between host (this) and guest (the cartesi machine) is through read-writing the second flash drive
@@ -68,6 +74,69 @@ const GET_METADATA: u64 = 0x00008;
 const SPAWN_COMPUTE: u64 = 0x0000A;
 
 const JOIN_COMPUTE: u64 = 0x0000B;
+
+pub async fn init(
+    machine_url: String,
+    ipfs_url: &str,
+    ipfs_write_url: &str,
+    payload: Option<Vec<u8>>,
+    state_cid: Cid,
+    metadata: HashMap<Vec<u8>, Vec<u8>>,
+    max_cycles_input: Option<u64>,
+    identificator: String,
+) -> Result<Cid, std::io::Error> {
+    let execute_parameter = ExecuteParameters {
+        machine_url,
+        ipfs_url: ipfs_url.to_string(),
+        ipfs_write_url: ipfs_write_url.to_string(),
+        payload,
+        state_cid: state_cid.to_bytes(),
+        metadata: metadata
+            .iter()
+            .map(|(k, v)| (hex::encode(&k), hex::encode(&v)))
+            .collect::<HashMap<String, String>>(),
+        max_cycles_input: max_cycles_input,
+        identificator,
+    };
+
+    let mut execute_parameter_bytes = Vec::new();
+
+    let data_json = serde_json::to_string(&execute_parameter).unwrap();
+    execute_parameter_bytes.extend(data_json.as_bytes().len().to_le_bytes());
+    execute_parameter_bytes.extend(data_json.as_bytes().to_vec());
+
+    let mut lambada_worker_path = String::from("/lambada-worker");
+    if let Ok(path) = std::env::var("LAMBADA_WORKER") {
+        lambada_worker_path = path;
+    }
+
+    let mut lambada_worker_execution = Command::new(lambada_worker_path)
+        .stdout(Stdio::piped())
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    tracing::info!("before running new thread");
+
+    let mut lambada_worker_stdin = lambada_worker_execution
+        .stdin
+        .as_mut()
+        .expect("Failed to open lambada-worker stdin");
+    tracing::info!("before send stdin");
+
+    lambada_worker_stdin
+        .write_all(&execute_parameter_bytes)
+        .unwrap();
+    tracing::info!("after send stdin");
+
+    let mut lambada_worker_stdout = lambada_worker_execution.stdout.unwrap();
+    if let Ok(parameter) = read_message(&mut lambada_worker_stdout) {
+        tracing::info!("{:?}", parameter);
+    }
+    tracing::info!("after reading output");
+
+    return Ok(Cid::default());
+}
 
 // execute is the entry point for the computation to be done, we have a particular state CID with it's associated /app directory
 // and a transaction payload + metadata and we want to do this computation and get the new state CID back or an error
@@ -171,6 +240,7 @@ pub async fn execute(
             .as_str()
             .unwrap(),
     );
+    tracing::info!("base_image_cid {:?}", base_image);
 
     let base_image_cid = Cid::try_from(base_image.clone()).unwrap();
 
@@ -1771,4 +1841,34 @@ pub fn calculate_sha256(input: &[u8]) -> Vec<u8> {
     let mut hasher = Sha256::new();
     hasher.update(input);
     hasher.finalize().to_vec()
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ExecuteParameters {
+    machine_url: String,
+    ipfs_url: String,
+    ipfs_write_url: String,
+    payload: Option<Vec<u8>>,
+    state_cid: Vec<u8>,
+    metadata: HashMap<String, String>,
+    max_cycles_input: Option<u64>,
+    identificator: String,
+}
+
+pub fn read_message<T>(pipe: &mut T) -> Result<Vec<u8>, std::io::Error>
+where
+    T: std::io::Read,
+{
+    tracing::info!("1");
+    let mut len: [u8; 8] = [0; 8];
+    tracing::info!("2");
+    pipe.read_exact(&mut len)?;
+    tracing::info!("3");
+    let len = u64::from_le_bytes(len);
+    tracing::info!("4");
+    let mut message: Vec<u8> = vec![0; len as usize];
+    tracing::info!("5");
+    pipe.read_exact(&mut message)?;
+    tracing::info!("6");
+    Ok(message)
 }

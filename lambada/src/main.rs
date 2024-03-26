@@ -33,6 +33,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::thread;
+use tracing::info;
 async fn start_subscriber(
     options: Arc<lambada::Options>,
     cid: Cid,
@@ -250,6 +251,57 @@ async fn request_handler(
                     .to_vec();
 
                 match compute(Some(data), options.clone(), cid.to_string(), None, metadata).await {
+                    Ok(cid) => {
+                        let json_response = serde_json::json!({
+                            "cid": Cid::try_from(cid).unwrap().to_string(),
+                        });
+                        let json_response = serde_json::to_string(&json_response).unwrap();
+
+                        let response = Response::new(Body::from(json_response));
+
+                        return response;
+                    }
+                    Err(e) => {
+                        let json_error = serde_json::json!({
+                            "error": e.to_string(),
+                        });
+                        let json_error = serde_json::to_string(&json_error).unwrap();
+                        return Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .body(Body::from(json_error))
+                            .unwrap();
+                    }
+                }
+            } else {
+                let json_error = serde_json::json!({
+                    "error": "request header should be application/octet-streams",
+                });
+                let json_error = serde_json::to_string(&json_error).unwrap();
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from(json_error))
+                    .unwrap();
+            }
+        }
+        (hyper::Method::POST, ["init", cid]) => {
+            if request.headers().get("content-type")
+                == Some(&hyper::header::HeaderValue::from_static(
+                    "application/octet-stream",
+                ))
+            {
+                let mut metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::<Vec<u8>, Vec<u8>>::new();
+
+                metadata.insert(
+                    calculate_sha256("sequencer".as_bytes()),
+                    calculate_sha256("compute".as_bytes()),
+                );
+
+                let data = hyper::body::to_bytes(request.into_body())
+                    .await
+                    .unwrap()
+                    .to_vec();
+
+                match init(Some(data), options.clone(), cid.to_string(), None, metadata).await {
                     Ok(cid) => {
                         let json_response = serde_json::json!({
                             "cid": Cid::try_from(cid).unwrap().to_string(),
@@ -939,6 +991,34 @@ async fn compute(
     .await
 }
 
+async fn init(
+    data: Option<Vec<u8>>,
+    options: Arc<lambada::Options>,
+    cid: String,
+    max_cycles: Option<u64>,
+    metadata: HashMap<Vec<u8>, Vec<u8>>,
+) -> Result<Cid, std::io::Error> {
+    let cartesi_machine_url = options.cartesi_machine_url.clone();
+    let ipfs_url = options.ipfs_url.as_str();
+    let ipfs_write_url = options.ipfs_write_url.as_str();
+
+    let machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url.to_string())
+        .await
+        .unwrap();
+    let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
+    let state_cid = Cid::try_from(cid.clone()).unwrap();
+    cartesi_lambda::init(
+        forked_machine_url,
+        ipfs_url,
+        ipfs_write_url,
+        data,
+        state_cid,
+        metadata,
+        max_cycles,
+        String::from("identificator"),
+    )
+    .await
+}
 async fn send_callback(
     body: Option<Vec<u8>>,
     callback_data: CallbackData,

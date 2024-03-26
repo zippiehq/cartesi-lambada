@@ -1466,11 +1466,13 @@ dependencies = [
  "rs-car",
  "rs-car-ipfs",
  "sequencer",
+ "serde",
  "serde_json",
  "sha2 0.10.8",
  "sqlite",
  "tokio",
  "tracing",
+ "tracing-subscriber 0.3.18",
 ]
 
 [[package]]
@@ -4988,6 +4990,7 @@ checksum = "3f35c735096c0293d313e8f2a641627472b83d01b937177fe76e5e2708d31e0d"
 name = "lambada"
 version = "0.1.0"
 dependencies = [
+ "ark-serialize 0.4.2",
  "async-compatibility-layer",
  "async-std",
  "base64 0.21.7",
