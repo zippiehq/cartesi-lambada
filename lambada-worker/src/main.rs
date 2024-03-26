@@ -1,44 +1,32 @@
 use async_std::stream::StreamExt;
-use async_std::sync::Mutex;
-use async_std::task;
+use async_std::{sync::Mutex, task};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use cartesi_machine_json_rpc::client::{JsonRpcCartesiMachineClient, MachineRuntimeConfig};
 use cid::Cid;
 use futures::TryStreamExt;
-use hyper::body::to_bytes;
-use hyper::{header, Body, Client, HeaderMap, Method, Request, Response, Server};
-use hyper::{StatusCode, Uri};
-use hyper_tls::HttpsConnector;
+use hyper::Request;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
+use nix::libc;
+use nix::sys::wait::waitpid;
+use nix::unistd::{fork, ForkResult};
+use os_pipe::{dup_stdin, dup_stdout};
+use polling::{Event, Events, Poller};
 use rs_car_ipfs::single_file::read_single_file_seek;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
 use std::collections::HashMap;
+use std::fs::File;
 use std::io::Cursor;
-use std::io::Stderr;
-use std::io::Stdout;
+use std::io::Read;
 use std::io::Write;
-use std::process::Command;
-use std::process::Stdio;
-use std::sync::mpsc::channel;
+use std::os::fd::AsFd;
+use std::os::fd::AsRawFd;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{thread, time::SystemTime};
-// How we communicate between host (this) and guest (the cartesi machine) is through read-writing the second flash drive
-// which is placed in memory at MACHINE_IO_ADDRESSS. Special care is needed on machine side to flush/ignore OS caches until PMEM/DAX comes around.
-//
-// The guest writes certain operations along with serialized parameters into memory, does an automatic yield, and the host handles the operation
-// and resumes its execution after clearing yield flag.
-//
-// The model we are assuming here:
-// - a base machine image, that'll boot up
-// - signal LOAD_APP (give me an app CID),
-// - and the app will signal LOAD_TX (give me a payload and state CID + app CID (for double checking it's running the right image))
-// - and result in FINISH (accept/reject) with a new state CID or EXCEPTION
-// - halting or out of cycles is a failed tx
-
 pub const MACHINE_IO_ADDRESSS: u64 = 0x90000000000000;
 
 // IPFS 'de-hashing' - get a IPFS block based on a CID
@@ -62,83 +50,119 @@ const LOAD_APP: u64 = 0x00006;
 // make a hint that we're expecting certain IPFS hashes to be available (for example all hashes from ethereum block X), null-op in arbitration
 const HINT: u64 = 0x00007;
 
-// retrieve from a data source
-
-const GET_DATA: u64 = 0x00009;
-
-const NAMESPACE_KECCAK256: u64 = 0x2;
-
 // get metadata by 32-byte hash
 const GET_METADATA: u64 = 0x00008;
 
 const SPAWN_COMPUTE: u64 = 0x0000A;
 
 const JOIN_COMPUTE: u64 = 0x0000B;
-
-pub async fn init(
-    machine_url: String,
-    ipfs_url: &str,
-    ipfs_write_url: &str,
-    payload: Option<Vec<u8>>,
-    state_cid: Cid,
-    metadata: HashMap<Vec<u8>, Vec<u8>>,
-    max_cycles_input: Option<u64>,
-    identificator: String,
-) -> Result<ExecuteResult, std::io::Error> {
-    let execute_parameter = ExecuteParameters {
-        machine_url,
-        ipfs_url: ipfs_url.to_string(),
-        ipfs_write_url: ipfs_write_url.to_string(),
-        payload,
-        state_cid: state_cid.to_bytes(),
-        metadata: metadata
-            .iter()
-            .map(|(k, v)| (hex::encode(&k), hex::encode(&v)))
-            .collect::<HashMap<String, String>>(),
-        max_cycles_input: max_cycles_input,
-        identificator,
+fn main() {
+    let mut stdin = dup_stdin().unwrap();
+    let poller = Poller::new().unwrap();
+    let key = &stdin.as_fd().as_raw_fd();
+    unsafe {
+        poller
+            .add(&stdin.as_fd(), Event::readable(key.clone() as usize))
+            .unwrap()
     };
 
-    let mut execute_parameter_bytes = Vec::new();
+    let mut events = Events::new();
+    loop {
+        events.clear();
+        poller
+            .wait(&mut events, Some(Duration::from_millis(100)))
+            .unwrap();
 
-    let data_json = serde_json::to_string(&execute_parameter).unwrap();
-    execute_parameter_bytes.extend(data_json.as_bytes().len().to_le_bytes());
-    execute_parameter_bytes.extend(data_json.as_bytes().to_vec());
+        for ev in events.iter() {
+            if ev.key == key.clone() as usize {
+                if let Ok(parameter) = read_message(&stdin) {
+                    let (reader_for_parent, writer_for_parent) = os_pipe::pipe().unwrap();
+                    let (reader_for_child, writer_for_child) = os_pipe::pipe().unwrap();
+                let execute_parameter = serde_json::from_slice::<ExecuteParameters>(&parameter).unwrap();
+                    match unsafe { fork() } {
+                        Ok(ForkResult::Parent { child, .. }) => {
+                            tracing::info!(
+                                "Continuing execution in parent process, new child has pid: {}",
+                                child
+                            );
+                            drop(reader_for_parent);
+                            drop(writer_for_child);
 
-    let mut lambada_worker_path = String::from("/lambada-worker");
-    if let Ok(path) = std::env::var("LAMBADA_WORKER") {
-        lambada_worker_path = path;
+                            write_message(&writer_for_parent, &execute_parameter).unwrap();
+
+                            drop(writer_for_parent);
+
+                            if let Ok(execute_output) = read_message(&reader_for_child) {
+                                let execute_result =
+                                    serde_json::from_slice::<ExecuteResult>(&execute_output)
+                                        .expect("error parse execute result");
+                                let stdout = dup_stdout().unwrap();
+                                write_message(&stdout, &execute_result).unwrap();
+                                drop(reader_for_child);
+                                drop(stdout);
+                            }
+                            waitpid(child, None).unwrap();
+                        }
+                        Ok(ForkResult::Child) => {
+                            drop(reader_for_child);
+                            drop(writer_for_parent);
+                            if let Ok(parent_input) = read_message(&reader_for_parent) {
+                                let input =
+                                    serde_json::from_slice::<ExecuteParameters>(&parent_input)
+                                        .unwrap();
+
+                                task::block_on(async {
+                                    let result = execute(
+                                        input.machine_url,
+                                        input.ipfs_url.as_str(),
+                                        input.ipfs_write_url.as_str(),
+                                        input.payload,
+                                        Cid::try_from(input.state_cid).unwrap(),
+                                        input
+                                            .metadata
+                                            .iter()
+                                            .map(|(k, v)| {
+                                                (hex::decode(&k).unwrap(), hex::decode(&v).unwrap())
+                                            })
+                                            .collect::<HashMap<Vec<u8>, Vec<u8>>>(),
+                                        input.max_cycles_input,
+                                    )
+                                    .await;
+                                    let response = ExecuteResult {
+                                        identificator: input.identificator,
+                                        result,
+                                    };
+                                    write_message(&writer_for_child, &response).unwrap();
+                                });
+                            }
+                            drop(reader_for_parent);
+                            let random_number = rand::random::<u64>();
+                            let my_stdout =
+                                File::create(format!("/tmp/{}-stdout.log", random_number))
+                                    .expect("Failed to create stdout file");
+                            let my_stderr =
+                                File::create(format!("/tmp/{}-stderr.log", random_number))
+                                    .expect("Failed to create stderr file");
+                            let stdout_fd = my_stdout.as_raw_fd();
+                            let stderr_fd = my_stderr.as_raw_fd();
+                            unsafe {
+                                libc::close(1);
+                                libc::close(2);
+                                libc::dup2(stdout_fd, 1);
+                                libc::dup2(stderr_fd, 2);
+                            }
+                            tracing::info!("now it works");
+
+                            std::process::exit(0);
+                        }
+                        Err(_) => {}
+                    }
+                }
+            }
+        }
     }
-
-    let mut lambada_worker_execution = Command::new(lambada_worker_path)
-        .stdout(Stdio::piped())
-        .stdin(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-
-    let lambada_worker_stdin = lambada_worker_execution
-        .stdin
-        .as_mut()
-        .expect("Failed to open lambada-worker stdin");
-
-    lambada_worker_stdin
-        .write_all(&execute_parameter_bytes)
-        .unwrap();
-
-    let mut lambada_worker_stdout = lambada_worker_execution.stdout.unwrap();
-    if let Ok(parameter) = read_message(&mut lambada_worker_stdout) {
-        return Ok(serde_json::from_slice::<ExecuteResult>(&parameter).unwrap());
-    }
-    return Err(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        "no output for request",
-    ));
 }
-
-// execute is the entry point for the computation to be done, we have a particular state CID with it's associated /app directory
-// and a transaction payload + metadata and we want to do this computation and get the new state CID back or an error
-pub async fn execute(
+async fn execute(
     machine_url: String,
     ipfs_url: &str,
     ipfs_write_url: &str,
@@ -146,9 +170,11 @@ pub async fn execute(
     state_cid: Cid,
     metadata: HashMap<Vec<u8>, Vec<u8>>,
     max_cycles_input: Option<u64>,
-) -> Result<Cid, std::io::Error> {
-    let mut thread_execute: HashMap<Vec<u8>, thread::JoinHandle<Result<Cid, std::io::Error>>> =
-        HashMap::<Vec<u8>, thread::JoinHandle<Result<Cid, std::io::Error>>>::new();
+) -> Result<Vec<u8>, serde_error::Error> {
+    let mut thread_execute: HashMap<
+        Vec<u8>,
+        thread::JoinHandle<Result<Vec<u8>, serde_error::Error>>,
+    > = HashMap::<Vec<u8>, thread::JoinHandle<Result<Vec<u8>, serde_error::Error>>>::new();
     tracing::info!("state cid {:?}", state_cid.to_string());
     let time_before_receive_app_cid = SystemTime::now();
     let mut measure_execution_time = false;
@@ -238,7 +264,6 @@ pub async fn execute(
             .as_str()
             .unwrap(),
     );
-    tracing::info!("base_image_cid {:?}", base_image);
 
     let base_image_cid = Cid::try_from(base_image.clone()).unwrap();
 
@@ -503,12 +528,12 @@ pub async fn execute(
                 let time_after_read_cid = SystemTime::now();
                 if measure_execution_time {
                     tracing::info!(
-                    "read_memory(MACHINE_IO_ADDRESSS + 16, length) (length) took {} milliseconds",
-                    time_after_read_cid
-                        .duration_since(time_before_read_cid)
-                        .unwrap()
-                        .as_millis()
-                );
+                        "read_memory(MACHINE_IO_ADDRESSS + 16, length) (length) took {} milliseconds",
+                        time_after_read_cid
+                            .duration_since(time_before_read_cid)
+                            .unwrap()
+                            .as_millis()
+                    );
                 }
 
                 tracing::info!("read cid {:?}", cid.to_string());
@@ -541,12 +566,12 @@ pub async fn execute(
                 let time_after_write_block = SystemTime::now();
                 if measure_execution_time {
                     tracing::info!(
-                    "write_memory(MACHINE_IO_ADDRESSS + 16, STANDARD.encode(block.clone())) (writing encoded block) took {} milliseconds",
-                    time_after_write_block
-                    .duration_since(time_before_write_block)
-                    .unwrap()
-                    .as_millis()
-                );
+                        "write_memory(MACHINE_IO_ADDRESSS + 16, STANDARD.encode(block.clone())) (writing encoded block) took {} milliseconds",
+                        time_after_write_block
+                        .duration_since(time_before_write_block)
+                        .unwrap()
+                        .as_millis()
+                    );
                 }
 
                 let time_before_write_block_len = SystemTime::now();
@@ -561,12 +586,12 @@ pub async fn execute(
                 let time_after_write_block_len = SystemTime::now();
                 if measure_execution_time {
                     tracing::info!(
-                    "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(block.len().to_be_bytes().to_vec())) (writing block length) took {} milliseconds",
-                    time_after_write_block_len
-                    .duration_since(time_before_write_block_len)
-                    .unwrap()
-                    .as_millis()
-                );
+                        "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(block.len().to_be_bytes().to_vec())) (writing block length) took {} milliseconds",
+                        time_after_write_block_len
+                        .duration_since(time_before_write_block_len)
+                        .unwrap()
+                        .as_millis()
+                    );
                 }
 
                 tracing::info!("read_block info was written");
@@ -602,8 +627,10 @@ pub async fn execute(
                             .as_millis()
                     );
                 }
-
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, "exception"));
+                return Err(serde_error::Error::new(&std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "exception",
+                )));
             }
             // Handles the LOAD_TX action coming from VM/guest:
             // 1. Checks if the `machine_loaded_state` is either 0 or 1 [TODO: explain this better]:. If true, performs the following:
@@ -694,14 +721,14 @@ pub async fn execute(
                                 let time_after_storing_forked_machine = SystemTime::now();
                                 if measure_execution_time {
                                     tracing::info!(
-                                    "storing forked machine /data/snapshot/{}_{} took {} milliseconds",
-                                    base_image,
-                                    app_cid.clone().to_string(),
-                                    time_after_storing_forked_machine
-                                    .duration_since(time_before_storing_forked_machine)
-                                    .unwrap()
-                                    .as_millis()
-                                );
+                                        "storing forked machine /data/snapshot/{}_{} took {} milliseconds",
+                                        base_image,
+                                        app_cid.clone().to_string(),
+                                        time_after_storing_forked_machine
+                                        .duration_since(time_before_storing_forked_machine)
+                                        .unwrap()
+                                        .as_millis()
+                                    );
                                 }
                                 let before_destroying_machine = SystemTime::now();
                                 forked_machine.destroy().await.unwrap();
@@ -772,7 +799,7 @@ pub async fn execute(
                         );
                     }
 
-                    return Ok(Cid::default());
+                    return Ok(Vec::new());
                 }
                 let cid_length = state_cid.clone().to_bytes().len() as u64;
                 let time_before_write_cid_length = SystemTime::now();
@@ -787,12 +814,12 @@ pub async fn execute(
                 let time_after_write_cid_length = SystemTime::now();
                 if measure_execution_time {
                     tracing::info!(
-                    "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(cid_length.to_be_bytes().to_vec())) (writing encoded cid length) took {} milliseconds",
-                    time_after_write_cid_length
-                    .duration_since(time_before_write_cid_length)
-                    .unwrap()
-                    .as_millis()
-                );
+                        "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(cid_length.to_be_bytes().to_vec())) (writing encoded cid length) took {} milliseconds",
+                        time_after_write_cid_length
+                        .duration_since(time_before_write_cid_length)
+                        .unwrap()
+                        .as_millis()
+                    );
                 }
 
                 let time_before_write_state_cid = SystemTime::now();
@@ -807,12 +834,12 @@ pub async fn execute(
                 let time_after_write_state_cid = SystemTime::now();
                 if measure_execution_time {
                     tracing::info!(
-                    "write_memory(MACHINE_IO_ADDRESSS + 8, STANDARD.encode(state_cid.clone().to_bytes()),)(writing encoded cid) took {} milliseconds",
-                    time_after_write_state_cid
-                    .duration_since(time_before_write_state_cid)
-                    .unwrap()
-                    .as_millis()
-                );
+                        "write_memory(MACHINE_IO_ADDRESSS + 8, STANDARD.encode(state_cid.clone().to_bytes()),)(writing encoded cid) took {} milliseconds",
+                        time_after_write_state_cid
+                        .duration_since(time_before_write_state_cid)
+                        .unwrap()
+                        .as_millis()
+                    );
                 }
 
                 let payload_length = payload.clone().unwrap().len() as u64;
@@ -830,12 +857,12 @@ pub async fn execute(
 
                 if measure_execution_time {
                     tracing::info!(
-                    "write_memory(MACHINE_IO_ADDRESSS + 16 + cid_length, STANDARD.encode(payload_length.to_be_bytes().to_vec()))(writing payload length) took {} milliseconds",
-                    time_after_write_payload_length
-                    .duration_since(time_before_write_payload_length)
-                    .unwrap()
-                    .as_millis()
-                );
+                        "write_memory(MACHINE_IO_ADDRESSS + 16 + cid_length, STANDARD.encode(payload_length.to_be_bytes().to_vec()))(writing payload length) took {} milliseconds",
+                        time_after_write_payload_length
+                        .duration_since(time_before_write_payload_length)
+                        .unwrap()
+                        .as_millis()
+                    );
                 }
 
                 let time_before_write_payload = SystemTime::now();
@@ -852,12 +879,12 @@ pub async fn execute(
 
                 if measure_execution_time {
                     tracing::info!(
-                        "write_memory(MACHINE_IO_ADDRESSS + 24 + cid_length, STANDARD.encode(payload.clone().unwrap()))(writing payload) took {} milliseconds",
-                        time_after_write_payload
-                    .duration_since(time_before_write_payload)
-                    .unwrap()
-                    .as_millis()
-                    );
+                            "write_memory(MACHINE_IO_ADDRESSS + 24 + cid_length, STANDARD.encode(payload.clone().unwrap()))(writing payload) took {} milliseconds",
+                            time_after_write_payload
+                        .duration_since(time_before_write_payload)
+                        .unwrap()
+                        .as_millis()
+                        );
                 }
 
                 tracing::info!("load_tx info was written");
@@ -880,12 +907,12 @@ pub async fn execute(
 
                 if measure_execution_time {
                     tracing::info!(
-                    "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading status) took {} milliseconds",
-                    time_after_read_status
-                    .duration_since(time_before_read_status)
-                    .unwrap()
-                    .as_millis()
-                );
+                        "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading status) took {} milliseconds",
+                        time_after_read_status
+                        .duration_since(time_before_read_status)
+                        .unwrap()
+                        .as_millis()
+                    );
                 }
 
                 let time_before_read_data_length = SystemTime::now();
@@ -902,12 +929,12 @@ pub async fn execute(
 
                 if measure_execution_time {
                     tracing::info!(
-                    "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading status) took {} milliseconds",
-                    time_after_read_data_length
-                    .duration_since(time_before_read_data_length)
-                    .unwrap()
-                    .as_millis()
-                );
+                        "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading status) took {} milliseconds",
+                        time_after_read_data_length
+                        .duration_since(time_before_read_data_length)
+                        .unwrap()
+                        .as_millis()
+                    );
                 }
 
                 let time_before_read_data = SystemTime::now();
@@ -920,18 +947,17 @@ pub async fn execute(
 
                 if measure_execution_time {
                     tracing::info!(
-                    "read_memory(MACHINE_IO_ADDRESSS + 24, length)(reading data) took {} milliseconds",
-                    time_after_read_data
-                    .duration_since(time_before_read_data)
-                    .unwrap()
-                    .as_millis()
-                );
+                        "read_memory(MACHINE_IO_ADDRESSS + 24, length)(reading data) took {} milliseconds",
+                        time_after_read_data
+                        .duration_since(time_before_read_data)
+                        .unwrap()
+                        .as_millis()
+                    );
                 }
 
                 match status {
                     0 => {
                         tracing::info!("HTIF_YIELD_REASON_RX_ACCEPTED");
-                        println!("HTIF_YIELD_REASON_RX_ACCEPTED");
                         let before_destroying_machine = SystemTime::now();
                         machine.destroy().await.unwrap();
                         let after_destroying_machine = SystemTime::now();
@@ -964,11 +990,10 @@ pub async fn execute(
                             Cid::try_from(data.clone()).unwrap()
                         );
 
-                        return Ok(Cid::try_from(data).unwrap());
+                        return Ok(data);
                     }
                     1 => {
                         tracing::info!("HTIF_YIELD_REASON_RX_REJECTED");
-                        println!("HTIF_YIELD_REASON_RX_REJECTED");
                         let before_destroying_machine = SystemTime::now();
                         machine.destroy().await.unwrap();
                         let after_destroying_machine = SystemTime::now();
@@ -996,10 +1021,10 @@ pub async fn execute(
                                     .as_millis()
                             );
                         }
-                        return Err(std::io::Error::new(
+                        return Err(serde_error::Error::new(&std::io::Error::new(
                             std::io::ErrorKind::Other,
                             "transaction was rejected",
-                        ));
+                        )));
                     }
                     _ => {
                         let before_destroying_machine = SystemTime::now();
@@ -1028,11 +1053,10 @@ pub async fn execute(
                                     .as_millis()
                             );
                         }
-
-                        return Err(std::io::Error::new(
+                        return Err(serde_error::Error::new(&std::io::Error::new(
                             std::io::ErrorKind::Other,
                             "unknown status",
-                        ));
+                        )));
                     }
                 }
             }
@@ -1057,12 +1081,12 @@ pub async fn execute(
                 let time_after_read_data_length = SystemTime::now();
                 if measure_execution_time {
                     tracing::info!(
-                    "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading data length) took {} milliseconds",
-                    time_after_read_data_length
-                        .duration_since(time_before_read_data_length)
-                        .unwrap()
-                        .as_millis()
-                );
+                        "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading data length) took {} milliseconds",
+                        time_after_read_data_length
+                            .duration_since(time_before_read_data_length)
+                            .unwrap()
+                            .as_millis()
+                    );
                 }
 
                 let time_before_read_data = SystemTime::now();
@@ -1075,12 +1099,12 @@ pub async fn execute(
                 let time_after_read_data = SystemTime::now();
                 if measure_execution_time {
                     tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 16, length)(reading data ) took {} milliseconds",
-                        time_after_read_data
-                            .duration_since(time_before_read_data)
-                            .unwrap()
-                            .as_millis()
-                    );
+                            "read_memory(MACHINE_IO_ADDRESSS + 16, length)(reading data ) took {} milliseconds",
+                            time_after_read_data
+                                .duration_since(time_before_read_data)
+                                .unwrap()
+                                .as_millis()
+                        );
                 }
 
                 let data = Cursor::new(memory.clone());
@@ -1157,13 +1181,13 @@ pub async fn execute(
                                 let time_after_storing_forked_machine = SystemTime::now();
                                 if measure_execution_time {
                                     tracing::info!(
-                                    "storing forked machine /data/snapshot/{}_bootedup took {} milliseconds",
-                                    base_image,
-                                    time_after_storing_forked_machine
-                                        .duration_since(time_before_storing_forked_machine)
-                                        .unwrap()
-                                        .as_millis()
-                                );
+                                        "storing forked machine /data/snapshot/{}_bootedup took {} milliseconds",
+                                        base_image,
+                                        time_after_storing_forked_machine
+                                            .duration_since(time_before_storing_forked_machine)
+                                            .unwrap()
+                                            .as_millis()
+                                    );
                                 }
 
                                 let before_destroying_machine = SystemTime::now();
@@ -1224,12 +1248,12 @@ pub async fn execute(
                 let time_after_writing_cid_length = SystemTime::now();
                 if measure_execution_time {
                     tracing::info!(
-                    "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(cid_length.to_be_bytes().to_vec()))(writing cid length) took {} milliseconds",
-                    time_after_writing_cid_length
-                        .duration_since(time_before_writing_cid_length)
-                        .unwrap()
-                        .as_millis()
-                );
+                        "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(cid_length.to_be_bytes().to_vec()))(writing cid length) took {} milliseconds",
+                        time_after_writing_cid_length
+                            .duration_since(time_before_writing_cid_length)
+                            .unwrap()
+                            .as_millis()
+                    );
                 }
 
                 let time_before_writing_app_cid = SystemTime::now();
@@ -1243,12 +1267,12 @@ pub async fn execute(
                 let time_after_writing_app_cid = SystemTime::now();
                 if measure_execution_time {
                     tracing::info!(
-                    "write_memory(MACHINE_IO_ADDRESSS + 8, STANDARD.encode(app_cid.clone().to_bytes()),)(writing cid length) took {} milliseconds",
-                    time_after_writing_app_cid
-                        .duration_since(time_before_writing_app_cid)
-                        .unwrap()
-                        .as_millis()
-                );
+                        "write_memory(MACHINE_IO_ADDRESSS + 8, STANDARD.encode(app_cid.clone().to_bytes()),)(writing cid length) took {} milliseconds",
+                        time_after_writing_app_cid
+                            .duration_since(time_before_writing_app_cid)
+                            .unwrap()
+                            .as_millis()
+                    );
                 }
 
                 tracing::info!("load app info was written");
@@ -1272,53 +1296,37 @@ pub async fn execute(
                 let time_after_reading_payload_length = SystemTime::now();
                 if measure_execution_time {
                     tracing::info!(
-                    "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading payload length) took {} milliseconds",
-                    time_after_reading_payload_length
-                        .duration_since(time_before_reading_payload_length)
-                        .unwrap()
-                        .as_millis()
-                );
+                        "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading payload length) took {} milliseconds",
+                        time_after_reading_payload_length
+                            .duration_since(time_before_reading_payload_length)
+                            .unwrap()
+                            .as_millis()
+                    );
                 }
 
                 let time_before_reading_payload = SystemTime::now();
 
-                let payload: Vec<u8> = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 16, payload_length)
-                    .await
-                    .unwrap()
-                    .try_into()
-                    .unwrap();
+                let payload = u64::from_be_bytes(
+                    machine
+                        .read_memory(MACHINE_IO_ADDRESSS + 16, payload_length)
+                        .await
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                );
 
                 let time_after_reading_payload = SystemTime::now();
                 if measure_execution_time {
                     tracing::info!(
-                    "read_memory(MACHINE_IO_ADDRESSS + 16, payload_length)(reading payload) took {} milliseconds",
-                    time_after_reading_payload
-                        .duration_since(time_before_reading_payload)
-                        .unwrap()
-                        .as_millis()
-                );
+                        "read_memory(MACHINE_IO_ADDRESSS + 16, payload_length)(reading payload) took {} milliseconds",
+                        time_after_reading_payload
+                            .duration_since(time_before_reading_payload)
+                            .unwrap()
+                            .as_millis()
+                    );
                 }
 
                 tracing::info!("hint payload {:?}", payload);
-                // XXX we send hint to the KECCAK256_SOURCE for now
-                let https = HttpsConnector::new();
-                let client = Client::builder().build::<_, hyper::Body>(https);
-
-                let uri: String = format!(
-                    "{}/hint/{}",
-                    std::env::var("KECCAK256_SOURCE").unwrap(),
-                    str::replace(std::str::from_utf8(&payload.clone()).unwrap(), " ", "%20")
-                )
-                .parse()
-                .unwrap();
-
-                let block_req = Request::builder()
-                    .method("GET")
-                    .uri(uri)
-                    .body(Body::empty())
-                    .unwrap();
-                client.request(block_req).await.unwrap();
             }
             // Handles the GET_METADATA action:
             // 1. Reads a 64-bit value from the specified memory address (MACHINE_IO_ADDRESSS + 8) and converts it from big-endian to a u64, representing the length of a metadata key
@@ -1343,12 +1351,12 @@ pub async fn execute(
                 let time_after_reading_metadata_key_length = SystemTime::now();
                 if measure_execution_time {
                     tracing::info!(
-                    "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading metadata key length) took {} milliseconds",
-                    time_after_reading_metadata_key_length
-                        .duration_since(time_before_reading_metadata_key_length)
-                        .unwrap()
-                        .as_millis()
-                );
+                        "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading metadata key length) took {} milliseconds",
+                        time_after_reading_metadata_key_length
+                            .duration_since(time_before_reading_metadata_key_length)
+                            .unwrap()
+                            .as_millis()
+                    );
                 }
 
                 let time_before_reading_metadata_key = SystemTime::now();
@@ -1361,12 +1369,12 @@ pub async fn execute(
                 let time_after_reading_metadata_key = SystemTime::now();
                 if measure_execution_time {
                     tracing::info!(
-                    "read_memory(MACHINE_IO_ADDRESSS + 16, length)(reading metadata key) took {} milliseconds",
-                    time_after_reading_metadata_key
-                        .duration_since(time_before_reading_metadata_key)
-                        .unwrap()
-                        .as_millis()
-                );
+                        "read_memory(MACHINE_IO_ADDRESSS + 16, length)(reading metadata key) took {} milliseconds",
+                        time_after_reading_metadata_key
+                            .duration_since(time_before_reading_metadata_key)
+                            .unwrap()
+                            .as_millis()
+                    );
                 }
 
                 tracing::info!("read metadata: {:?}", hex::encode(metadata_key.clone()));
@@ -1384,12 +1392,12 @@ pub async fn execute(
                 let time_after_writing_metadata = SystemTime::now();
                 if measure_execution_time {
                     tracing::info!(
-                    "write_memory(MACHINE_IO_ADDRESSS + 16, STANDARD.encode(metadata_result.clone()))(writing encoded metadata) took {} milliseconds",
-                    time_after_writing_metadata
-                        .duration_since(time_before_writing_metadata)
-                        .unwrap()
-                        .as_millis()
-                );
+                        "write_memory(MACHINE_IO_ADDRESSS + 16, STANDARD.encode(metadata_result.clone()))(writing encoded metadata) took {} milliseconds",
+                        time_after_writing_metadata
+                            .duration_since(time_before_writing_metadata)
+                            .unwrap()
+                            .as_millis()
+                    );
                 }
 
                 let time_before_writing_metadata_length = SystemTime::now();
@@ -1403,16 +1411,15 @@ pub async fn execute(
                 let time_after_writing_metadata_length = SystemTime::now();
                 if measure_execution_time {
                     tracing::info!(
-                    "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(metadata_result.len().to_be_bytes().to_vec()))(writing encoded metadata length) took {} milliseconds",
-                    time_after_writing_metadata_length
-                        .duration_since(time_before_writing_metadata_length)
-                        .unwrap()
-                        .as_millis()
-                );
+                        "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(metadata_result.len().to_be_bytes().to_vec()))(writing encoded metadata length) took {} milliseconds",
+                        time_after_writing_metadata_length
+                            .duration_since(time_before_writing_metadata_length)
+                            .unwrap()
+                            .as_millis()
+                    );
                 }
                 tracing::info!("metadata info was written");
             }
-
             SPAWN_COMPUTE => {
                 let length = u64::from_be_bytes(
                     machine
@@ -1566,16 +1573,13 @@ pub async fn execute(
                         machine
                             .write_memory(
                                 MACHINE_IO_ADDRESSS + 16,
-                                STANDARD.encode(cid.clone().to_bytes().len().to_be_bytes()),
+                                STANDARD.encode(cid.len().to_be_bytes()),
                             )
                             .await
                             .unwrap();
 
                         machine
-                            .write_memory(
-                                MACHINE_IO_ADDRESSS + 24,
-                                STANDARD.encode(cid.clone().to_bytes()),
-                            )
+                            .write_memory(MACHINE_IO_ADDRESSS + 24, STANDARD.encode(cid))
                             .await
                             .unwrap();
                     }
@@ -1588,67 +1592,6 @@ pub async fn execute(
                             .await
                             .unwrap();
                     }
-                }
-            }
-            GET_DATA => {
-                tracing::info!("GET_DATA");
-                let namespace = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
-                        .await
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-                let id_length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 16, 8)
-                        .await
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-                let id = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 24, id_length)
-                    .await
-                    .unwrap();
-
-                if namespace == NAMESPACE_KECCAK256 {
-                    let https = HttpsConnector::new();
-                    let client = Client::builder().build::<_, hyper::Body>(https);
-
-                    // XXX this is bad
-                    let uri: String = format!(
-                        "{}/dehash/{}",
-                        std::env::var("KECCAK256_SOURCE").unwrap(),
-                        std::str::from_utf8(id.as_slice()).unwrap()
-                    )
-                    .parse()
-                    .unwrap();
-
-                    let block_req = Request::builder()
-                        .method("GET")
-                        .uri(uri)
-                        .body(Body::empty())
-                        .unwrap();
-                    let block_response = client.request(block_req).await.unwrap();
-                    let body_bytes = hyper::body::to_bytes(block_response).await.unwrap();
-                    machine
-                        .write_memory(
-                            MACHINE_IO_ADDRESSS + 16,
-                            STANDARD.encode(body_bytes.clone()),
-                        )
-                        .await
-                        .unwrap();
-                    machine
-                        .write_memory(
-                            MACHINE_IO_ADDRESSS,
-                            STANDARD.encode(body_bytes.len().to_be_bytes().to_vec()),
-                        )
-                        .await
-                        .unwrap();
-                } else {
-                    panic!("unknown namespace");
                 }
             }
             _ => {
@@ -1684,11 +1627,10 @@ pub async fn execute(
                         .as_millis()
                 );
             }
-
-            return Err(std::io::Error::new(
+            return Err(serde_error::Error::new(&std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "machine halted without finishing, exception",
-            ));
+            )));
         }
         if interpreter_break_reason == Value::String("reached_target_mcycle".to_string()) {
             tracing::info!("reached cycles limit before completion of execution");
@@ -1717,11 +1659,10 @@ pub async fn execute(
                         .as_millis()
                 );
             }
-
-            return Err(std::io::Error::new(
+            return Err(serde_error::Error::new(&std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "reached cycles limit before completion of execution",
-            ));
+            )));
         }
         let time_before_resetting_iflags_y = SystemTime::now();
         // After handling the operation, we clear the yield flag and loop back and continue execution of machine
@@ -1817,7 +1758,6 @@ async fn dedup_download_directory(ipfs_url: &str, directory_cid: Cid, out_file_p
                 }
             }
             Err(er) => {
-                println!("{}", er.to_string());
             }
         }
         let after_dag_request = SystemTime::now();
@@ -1841,6 +1781,26 @@ pub fn calculate_sha256(input: &[u8]) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
+pub fn read_message(mut pipe: &os_pipe::PipeReader) -> Result<Vec<u8>, std::io::Error> {
+    let mut len: [u8; 8] = [0; 8];
+    pipe.read_exact(&mut len)?;
+    let len = u64::from_le_bytes(len);
+    let mut message: Vec<u8> = vec![0; len as usize];
+    pipe.read_exact(&mut message)?;
+    Ok(message)
+}
+
+pub fn write_message<T>(mut pipe: &os_pipe::PipeWriter, data: &T) -> Result<(), std::io::Error>
+where
+    T: ?Sized + Serialize,
+{
+    let data_json = serde_json::to_string(&data).unwrap();
+    pipe.write(&mut data_json.as_bytes().len().to_le_bytes())
+        .unwrap();
+    pipe.write(&mut data_json.as_bytes()).unwrap();
+    Ok(())
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct ExecuteParameters {
     machine_url: String,
@@ -1853,20 +1813,8 @@ pub struct ExecuteParameters {
     identificator: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize)]
 pub struct ExecuteResult {
-    pub result: Result<Vec<u8>, serde_error::Error>,
-    pub identificator: String,
-}
-
-pub fn read_message<T>(pipe: &mut T) -> Result<Vec<u8>, std::io::Error>
-where
-    T: std::io::Read,
-{
-    let mut len: [u8; 8] = [0; 8];
-    pipe.read_exact(&mut len)?;
-    let len = u64::from_le_bytes(len);
-    let mut message: Vec<u8> = vec![0; len as usize];
-    pipe.read_exact(&mut message)?;
-    Ok(message)
+    result: Result<Vec<u8>, serde_error::Error>,
+    identificator: String,
 }

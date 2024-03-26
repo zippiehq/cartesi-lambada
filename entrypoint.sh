@@ -74,10 +74,10 @@ mkdir -p /data/db/chains/
 mkdir -p /data/snapshot
 
 
-RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --espresso-testnet-sequencer-url $ESPRESSO_TESTNET_SEQUENCER_URL \
+LAMBADA_WORKER=/bin/lambada-worker RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --espresso-testnet-sequencer-url $ESPRESSO_TESTNET_SEQUENCER_URL \
 	--celestia-testnet-sequencer-url $CELESTIA_TESTNET_SEQUENCER_URL \
 	--machine-dir=/data/base-machines/lambada-base-machine \
 	--ipfs-url $IPFS_URL \
 	--cartesi-machine-url $CARTESI_MACHINE_URL \
-	--db-path /data/db/  2>&1 > /tmp/lambada.log
+	--db-path /data/db/
 	

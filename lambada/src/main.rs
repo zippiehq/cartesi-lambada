@@ -1,7 +1,7 @@
 use async_compatibility_layer::logging::{setup_backtrace, setup_logging};
 use async_std::sync::Mutex;
 use async_std::task;
-use cartesi_lambda::execute;
+use cartesi_lambda::{execute, ExecuteResult};
 use cartesi_machine_json_rpc::client::JsonRpcCartesiMachineClient;
 use celestia_rpc::BlobClient;
 use celestia_types::blob::SubmitOptions;
@@ -260,6 +260,78 @@ async fn request_handler(
 
                         return response;
                     }
+                    Err(e) => {
+                        let json_error = serde_json::json!({
+                            "error": e.to_string(),
+                        });
+                        let json_error = serde_json::to_string(&json_error).unwrap();
+                        return Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .body(Body::from(json_error))
+                            .unwrap();
+                    }
+                }
+            } else {
+                let json_error = serde_json::json!({
+                    "error": "request header should be application/octet-streams",
+                });
+                let json_error = serde_json::to_string(&json_error).unwrap();
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from(json_error))
+                    .unwrap();
+            }
+        }
+        (hyper::Method::POST, ["init", cid, identificator]) => {
+            if request.headers().get("content-type")
+                == Some(&hyper::header::HeaderValue::from_static(
+                    "application/octet-stream",
+                ))
+            {
+                let mut metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::<Vec<u8>, Vec<u8>>::new();
+
+                metadata.insert(
+                    calculate_sha256("sequencer".as_bytes()),
+                    calculate_sha256("compute".as_bytes()),
+                );
+
+                let data = hyper::body::to_bytes(request.into_body())
+                    .await
+                    .unwrap()
+                    .to_vec();
+
+                match init(
+                    Some(data),
+                    options.clone(),
+                    cid.to_string(),
+                    None,
+                    metadata,
+                    identificator.to_string(),
+                )
+                .await
+                {
+                    Ok(execute_result) => match execute_result.result {
+                        Ok(cid) => {
+                            let json_response = serde_json::json!({
+                                "cid": Cid::try_from(cid).unwrap().to_string(),
+                                "identificator": execute_result.identificator
+                            });
+                            let json_response = serde_json::to_string(&json_response).unwrap();
+                            let response = Response::new(Body::from(json_response));
+
+                            return response;
+                        }
+                        Err(e) => {
+                            let json_response = serde_json::json!({
+                                "error": e.to_string(),
+                                "identificator": execute_result.identificator
+                            });
+                            let json_response = serde_json::to_string(&json_response).unwrap();
+                            let response = Response::new(Body::from(json_response));
+
+                            return response;
+                        }
+                    },
                     Err(e) => {
                         let json_error = serde_json::json!({
                             "error": e.to_string(),
@@ -939,6 +1011,42 @@ async fn compute(
     .await
 }
 
+async fn init(
+    data: Option<Vec<u8>>,
+    options: Arc<lambada::Options>,
+    cid: String,
+    max_cycles: Option<u64>,
+    metadata: HashMap<Vec<u8>, Vec<u8>>,
+    identificator: String,
+) -> Result<ExecuteResult, std::io::Error> {
+    let cartesi_machine_url = options.cartesi_machine_url.clone();
+    let ipfs_url = options.ipfs_url.clone();
+    let ipfs_write_url = options.ipfs_write_url.clone();
+
+    let machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url.to_string())
+        .await
+        .unwrap();
+    let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
+    let state_cid = Cid::try_from(cid.clone()).unwrap();
+    //let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        task::block_on(async move {
+            cartesi_lambda::init(
+                forked_machine_url,
+                &ipfs_url,
+                &ipfs_write_url,
+                data,
+                state_cid,
+                metadata,
+                max_cycles,
+                identificator,
+            )
+            .await
+        })
+    })
+    .join()
+    .unwrap()
+}
 async fn send_callback(
     body: Option<Vec<u8>>,
     callback_data: CallbackData,
