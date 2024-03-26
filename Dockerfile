@@ -10,6 +10,7 @@ COPY ./Cargo.toml /build/Cargo.toml
 COPY ./Cargo.lock /build/Cargo.lock
 COPY ./cartesi_lambda /build/cartesi_lambda
 COPY ./lambada /build/lambada
+COPY ./lambada-worker /build/lambada-worker
 ARG RELEASE=--release
 RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
 
@@ -37,6 +38,7 @@ RUN bash kubo/install.sh && rm -rf kubo kubo_v0.24.0_linux-$ARCH.tar.gz
 COPY --from=lambada-image /lambada-base-machine.car.gz /lambada-base-machine.car.gz
 COPY --from=build /build/target/$RELEASE_DIR/lambada /bin/lambada
 COPY --from=build /kernel/Image /Image-riscv64
+COPY --from=build /build/target/$RELEASE_DIR/lambada-worker /bin/lambada-worker
 COPY ./cartesi-build.sh /usr/bin/cartesi-build
 COPY ./wait-for-callback.pl /usr/bin/wait-for-callback.pl
 RUN chmod +x /usr/bin/cartesi-build
