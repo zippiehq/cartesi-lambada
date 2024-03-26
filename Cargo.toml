@@ -3,4 +3,5 @@
 members = [
   "cartesi_lambda",
   "lambada",
+  "lambada_worker",
 ]
