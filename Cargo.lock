@@ -5036,6 +5036,7 @@ dependencies = [
 name = "lambada-worker"
 version = "0.1.0"
 dependencies = [
+ "async-compatibility-layer",
  "async-std",
  "base64 0.21.7",
  "cartesi-machine-json-rpc",

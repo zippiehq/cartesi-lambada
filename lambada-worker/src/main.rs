@@ -1,3 +1,4 @@
+use async_compatibility_layer::logging::{setup_backtrace, setup_logging};
 use async_std::stream::StreamExt;
 use async_std::{sync::Mutex, task};
 use base64::engine::general_purpose::STANDARD;
@@ -27,6 +28,7 @@ use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{thread, time::SystemTime};
+
 pub const MACHINE_IO_ADDRESSS: u64 = 0x90000000000000;
 
 // IPFS 'de-hashing' - get a IPFS block based on a CID
@@ -78,7 +80,8 @@ fn main() {
                 if let Ok(parameter) = read_message(&stdin) {
                     let (reader_for_parent, writer_for_parent) = os_pipe::pipe().unwrap();
                     let (reader_for_child, writer_for_child) = os_pipe::pipe().unwrap();
-                let execute_parameter = serde_json::from_slice::<ExecuteParameters>(&parameter).unwrap();
+                    let execute_parameter =
+                        serde_json::from_slice::<ExecuteParameters>(&parameter).unwrap();
                     match unsafe { fork() } {
                         Ok(ForkResult::Parent { child, .. }) => {
                             tracing::info!(
@@ -121,13 +124,14 @@ fn main() {
                                 libc::dup2(stdout_fd, 1);
                                 libc::dup2(stderr_fd, 2);
                             }
-                            tracing::info!("now it works");
                             if let Ok(parent_input) = read_message(&reader_for_parent) {
                                 let input =
                                     serde_json::from_slice::<ExecuteParameters>(&parent_input)
                                         .unwrap();
 
                                 task::block_on(async {
+                                    setup_logging();
+                                    setup_backtrace();
                                     let result = execute(
                                         input.machine_url,
                                         input.ipfs_url.as_str(),
@@ -1756,8 +1760,7 @@ async fn dedup_download_directory(ipfs_url: &str, directory_cid: Cid, out_file_p
                     );
                 }
             }
-            Err(er) => {
-            }
+            Err(er) => {}
         }
         let after_dag_request = SystemTime::now();
         if measure_execution_time {
