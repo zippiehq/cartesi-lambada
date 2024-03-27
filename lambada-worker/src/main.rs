@@ -106,6 +106,22 @@ fn main() {
                         Ok(ForkResult::Child) => {
                             drop(reader_for_child);
                             drop(writer_for_parent);
+                            let random_number = rand::random::<u64>();
+                            let my_stdout =
+                                File::create(format!("/tmp/{}-stdout.log", random_number))
+                                    .expect("Failed to create stdout file");
+                            let my_stderr =
+                                File::create(format!("/tmp/{}-stderr.log", random_number))
+                                    .expect("Failed to create stderr file");
+                            let stdout_fd = my_stdout.as_raw_fd();
+                            let stderr_fd = my_stderr.as_raw_fd();
+                            unsafe {
+                                libc::close(1);
+                                libc::close(2);
+                                libc::dup2(stdout_fd, 1);
+                                libc::dup2(stderr_fd, 2);
+                            }
+                            tracing::info!("now it works");
                             if let Ok(parent_input) = read_message(&reader_for_parent) {
                                 let input =
                                     serde_json::from_slice::<ExecuteParameters>(&parent_input)
@@ -136,23 +152,6 @@ fn main() {
                                 });
                             }
                             drop(reader_for_parent);
-                            let random_number = rand::random::<u64>();
-                            let my_stdout =
-                                File::create(format!("/tmp/{}-stdout.log", random_number))
-                                    .expect("Failed to create stdout file");
-                            let my_stderr =
-                                File::create(format!("/tmp/{}-stderr.log", random_number))
-                                    .expect("Failed to create stderr file");
-                            let stdout_fd = my_stdout.as_raw_fd();
-                            let stderr_fd = my_stderr.as_raw_fd();
-                            unsafe {
-                                libc::close(1);
-                                libc::close(2);
-                                libc::dup2(stdout_fd, 1);
-                                libc::dup2(stderr_fd, 2);
-                            }
-                            tracing::info!("now it works");
-
                             std::process::exit(0);
                         }
                         Err(_) => {}
