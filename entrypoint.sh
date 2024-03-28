@@ -21,7 +21,7 @@ if [ x$IPFS_URL = x ]; then
   done
   echo "IPFS up"
   IPFS_URL=http://127.0.0.1:5001
-  
+
   if [ -e /data/preload ]; then
      (
         # "live reload"
@@ -69,6 +69,10 @@ if [ x$CELESTIA_TESTNET_SEQUENCER_URL = x ]; then
    CELESTIA_TESTNET_SEQUENCER_URL=http://0.0.0.0:26658
 fi
 
+if [ x$EVM_DA_URL = x ]; then
+   EVM_DA_URL=http://127.0.0.1:8545
+fi
+
 mkdir -p /data/db
 mkdir -p /data/db/chains/
 mkdir -p /data/snapshot
@@ -78,6 +82,6 @@ RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --espresso-testnet-sequencer-url 
 	--celestia-testnet-sequencer-url $CELESTIA_TESTNET_SEQUENCER_URL \
 	--machine-dir=/data/base-machines/lambada-base-machine \
 	--ipfs-url $IPFS_URL \
+	--evm-da-url $EVM_DA_URL \
 	--cartesi-machine-url $CARTESI_MACHINE_URL \
 	--db-path /data/db/  2>&1 > /tmp/lambada.log
-	
