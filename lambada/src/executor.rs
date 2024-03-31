@@ -236,6 +236,18 @@ pub async fn subscribe(
                 )
                 .await;
             }
+
+            "evm-blocks" => {
+                subscribe_evm_blocks(
+                    &machine,
+                    starting_block_height,
+                    opt.clone(),
+                    &mut current_cid,
+                    genesis_cid_text.clone(),
+                    rx.clone(),
+                )
+                .await;
+            }
             _ => tracing::info!("Unknown sequencer type: {}", r#type),
         }
     }
@@ -416,7 +428,6 @@ async fn handle_tx(
     statement.bind((2, height as i64)).unwrap();
     statement.next().unwrap();
 }
-
 async fn is_chain_info_same(
     opt: ExecutorOptions,
     current_cid: Cid,
@@ -793,6 +804,74 @@ async fn subscribe_evm_da(
                 }
             }
         }
+
+        current_height += 1;
+    }
+}
+
+async fn subscribe_evm_blocks(
+    machine: &JsonRpcCartesiMachineClient,
+    starting_block_height: u64,
+    opt: ExecutorOptions,
+    current_cid: &mut Cid,
+    genesis_cid_text: String,
+    rx: Option<Arc<async_std::sync::Mutex<Receiver<(u64, Option<String>)>>>>,
+) {
+    let eth_rpc_url = opt.evm_da_url.clone();
+    let eth_client = Arc::new(
+        ethers::providers::Provider::<ethers::providers::Http>::try_from(&eth_rpc_url)
+            .expect("Could not instantiate Ethereum HTTP Provider"),
+    );
+    let mut current_height = starting_block_height;
+    while current_height < u64::MAX {
+        let latest_block = eth_client
+            .get_block_number()
+            .await
+            .expect("Failed to fetch the latest block number");
+        tracing::info!(
+            "EVM-BLOCKS: latest block {} current height {}",
+            latest_block,
+            current_height
+        );
+
+        if latest_block < current_height.into() {
+            tracing::info!(
+                "Waiting for block number {} to be available. Current latest block number: {}",
+                current_height,
+                latest_block
+            );
+            sleep(Duration::from_secs(2)).await;
+            continue;
+        }
+
+        let block = eth_client
+            .get_block(BlockId::Number(BlockNumber::Number(current_height.into())))
+            .await
+            .expect("Failed to fetch block")
+            .expect("Block not found");
+
+        tracing::info!("Processing block at height {}", current_height);
+        let mut metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+        metadata.insert(b"sequencer".to_vec(), b"evm-blocks".to_vec());
+        metadata.insert(
+            b"ethereum-block-height".to_vec(),
+            current_height.to_string().as_bytes().to_vec(),
+        );
+        metadata.insert(
+            b"ethereum-block-hash".to_vec(),
+            format!("{:?}", block.hash).as_bytes().to_vec(),
+        );
+        handle_tx(
+            machine,
+            opt.clone(),
+            Some(Vec::new()),
+            current_cid,
+            metadata,
+            current_height,
+            genesis_cid_text.clone(),
+            rx.clone(),
+        )
+        .await;
 
         current_height += 1;
     }
