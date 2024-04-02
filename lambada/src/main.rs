@@ -1,7 +1,7 @@
 use async_compatibility_layer::logging::{setup_backtrace, setup_logging};
 use async_std::sync::Mutex;
 use async_std::task;
-use cartesi_lambda::execute;
+use cartesi_lambda::{execute, lambada_worker_subprocess};
 use cartesi_machine_json_rpc::client::JsonRpcCartesiMachineClient;
 use celestia_rpc::BlobClient;
 use celestia_types::blob::SubmitOptions;
@@ -29,8 +29,7 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::mpsc;
-use std::sync::mpsc::Receiver;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 async fn start_subscriber(
@@ -101,9 +100,11 @@ async fn main() {
     let return_callback_ids: Arc<Mutex<HashMap<u64, Option<String>>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let (tx, rx) = mpsc::channel();
+
     let tx = Arc::new(Mutex::new(tx));
     let rx = Arc::new(Mutex::new(rx));
 
+    lambada_worker_subprocess();
     // Make sure database is initalized and then load subscriptions from database
     {
         let connection =
@@ -139,6 +140,7 @@ async fn main() {
                 let return_callback_ids = Arc::clone(&return_callback_ids);
                 let rx = Arc::clone(&rx);
                 let tx = Arc::clone(&tx);
+
                 async move {
                     let path = req.uri().path().to_owned();
                     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
@@ -911,6 +913,7 @@ async fn request_handler(
         }
     }
 }
+
 async fn compute(
     data: Option<Vec<u8>>,
     options: Arc<lambada::Options>,

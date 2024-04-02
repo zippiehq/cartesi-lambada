@@ -24,6 +24,10 @@ rs-car-ipfs = { git = "https://github.com/zippiehq/rs-car-ipfs" }
 rs-car = "0.4.1"
 sha2 = "0.10.8"
 hyper-tls = "0.5.0"
+serde = "1.0.163"
+tracing-subscriber = "0.3.18"
+serde-error = "0.1.2"
+rand = "0.8.5"
 
 [features]
 measure_execution_time = []

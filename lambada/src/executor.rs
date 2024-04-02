@@ -4,11 +4,11 @@ use sha2::Digest;
 use sha2::Sha256;
 use surf_disco::Url;
 use tide_disco::error::ServerError;
-
 type HotShotClient = surf_disco::Client<ServerError>;
 
 use async_std::stream::StreamExt;
 use cartesi_lambda::execute;
+use cartesi_lambda::{ExecuteParameters, ExecuteResult};
 use cartesi_machine_json_rpc::client::JsonRpcCartesiMachineClient;
 use celestia_rpc::{BlobClient, HeaderClient};
 use celestia_types::nmt::Namespace;
@@ -24,9 +24,9 @@ use sequencer::{SeqTypes, VmId};
 use serde::{Deserialize, Serialize};
 use sqlite::State;
 use std::collections::HashMap;
-use std::env;
 use std::str::FromStr;
 use std::sync::mpsc::Receiver;
+use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 use std::{
@@ -737,7 +737,7 @@ async fn subscribe_evm_da(
         ethers::providers::Provider::<ethers::providers::Http>::try_from(&eth_rpc_url)
             .expect("Could not instantiate Ethereum HTTP Provider"),
     );
-    let namespace = chain_vm_id;
+    let namespace = chain_vm_id.clone();
     let namespace_address =
         ethers::types::Address::from_str(&namespace).expect("Invalid namespace address");
     let mut current_height = starting_block_height;
