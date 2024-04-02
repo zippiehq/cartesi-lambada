@@ -876,6 +876,65 @@ async fn subscribe_evm_blocks(
         current_height += 1;
     }
 }
+async fn subscribe_evm_eip4844(
+    machine: &JsonRpcCartesiMachineClient,
+    starting_block_height: u64,
+    opt: ExecutorOptions,
+    current_cid: &mut Cid,
+    genesis_cid_text: String,
+    rx: Option<Arc<async_std::sync::Mutex<Receiver<(u64, Option<String>)>>>>,
+) {
+    let eth_rpc_url = opt.evm_da_url.clone();
+    let eth_client = Arc::new(
+        ethers::providers::Provider::<ethers::providers::Http>::try_from(&eth_rpc_url)
+            .expect("Could not instantiate Ethereum HTTP Provider"),
+    );
+
+    let mut current_height = starting_block_height;
+
+    while current_height < u64::MAX {
+        let latest_block = eth_client
+            .get_block_number()
+            .await
+            .expect("Failed to fetch the latest block number");
+
+        if latest_block < current_height.into() {
+            sleep(Duration::from_secs(2)).await;
+            continue;
+        }
+
+        let block = eth_client
+            .get_block_with_txs(BlockId::Number(BlockNumber::Number(current_height.into())))
+            .await
+            .expect("Failed to fetch block")
+            .expect("Block not found");
+
+        for tx in &block.transactions {
+            if tx.is_eip4844_blob_present() {
+                let blob_data = tx.extract_blob_data(); // placeholder
+                let tx_hash = tx.hash;
+                let mut metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+                metadata.insert(b"sequencer".to_vec(), b"evm-da".to_vec());
+                metadata.insert(b"ethereum-block-height".to_vec(), current_height.to_string().as_bytes().to_vec());
+                metadata.insert(b"ethereum-block-hash".to_vec(), format!("{:?}", block.hash).as_bytes().to_vec());
+                metadata.insert(b"ethereum-tx-hash".to_vec(), format!("{:?}", tx_hash).as_bytes().to_vec());
+
+                handle_tx(
+                    machine,
+                    opt.clone(),
+                    Some(blob_data),
+                    current_cid,
+                    metadata,
+                    current_height,
+                    genesis_cid_text.clone(),
+                    rx.clone(),
+                ).await;
+            }
+        }
+
+        current_height += 1;
+    }
+}
 
 pub fn calculate_sha256(input: &[u8]) -> Vec<u8> {
     let mut hasher = Sha256::new();
