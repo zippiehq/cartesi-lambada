@@ -9,7 +9,6 @@ type HotShotClient = surf_disco::Client<ServerError>;
 use async_std::stream::StreamExt;
 use cartesi_lambda::execute;
 use cartesi_lambda::{ExecuteParameters, ExecuteResult};
-use cartesi_machine_json_rpc::client::JsonRpcCartesiMachineClient;
 use celestia_rpc::{BlobClient, HeaderClient};
 use celestia_types::nmt::Namespace;
 use cid::Cid;
@@ -49,7 +48,6 @@ pub struct ExecutorOptions {
 
 pub async fn subscribe(
     opt: ExecutorOptions,
-    cartesi_machine_url: String,
     appchain: Cid,
     rx: Option<Arc<async_std::sync::Mutex<Receiver<(u64, Option<String>)>>>>,
 ) {
@@ -57,9 +55,6 @@ pub async fn subscribe(
     let mut current_cid = appchain.clone();
     let genesis_cid_text = current_cid.to_string();
     let mut current_height: u64 = u64::MAX;
-    let machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url)
-        .await
-        .unwrap();
     let ipfs_client = IpfsClient::from_str(&opt.ipfs_url).unwrap();
 
     // Set what our current chain info is, so we can notice later on if it changes
@@ -197,7 +192,6 @@ pub async fn subscribe(
                 let chain_info_cid = Arc::clone(&current_chain_info_cid);
 
                 subscribe_espresso(
-                    &machine,
                     current_height,
                     opt.clone(),
                     &mut current_cid,
@@ -212,7 +206,6 @@ pub async fn subscribe(
                 let chain_info_cid = Arc::clone(&current_chain_info_cid);
 
                 subscribe_celestia(
-                    &machine,
                     current_height,
                     chain_info_cid,
                     opt.clone(),
@@ -226,7 +219,6 @@ pub async fn subscribe(
 
             "evm-da" => {
                 subscribe_evm_da(
-                    &machine,
                     starting_block_height,
                     opt.clone(),
                     &mut current_cid,
@@ -239,7 +231,6 @@ pub async fn subscribe(
 
             "evm-blocks" => {
                 subscribe_evm_blocks(
-                    &machine,
                     starting_block_height,
                     opt.clone(),
                     &mut current_cid,
@@ -324,7 +315,6 @@ async fn trigger_callback_for_newblock(
 }
 
 async fn handle_tx(
-    machine: &JsonRpcCartesiMachineClient,
     opt: ExecutorOptions,
     data: Option<Vec<u8>>,
     current_cid: &mut Cid,
@@ -370,12 +360,9 @@ async fn handle_tx(
             }
         }
     } else {
-        let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
-
         let time_before_execute = SystemTime::now();
 
         let result = execute(
-            forked_machine_url,
             opt.ipfs_url.as_str(),
             opt.ipfs_write_url.as_str(),
             data,
@@ -400,7 +387,7 @@ async fn handle_tx(
                     "old current_cid {:?}",
                     Cid::try_from(current_cid.clone()).unwrap().to_string()
                 );
-                *current_cid = resulted_cid;
+                *current_cid = Cid::try_from(resulted_cid).unwrap();
                 tracing::info!(
                     "resulted current_cid {:?}",
                     Cid::try_from(current_cid.clone()).unwrap().to_string()
@@ -448,7 +435,6 @@ async fn is_chain_info_same(
 }
 
 async fn subscribe_espresso(
-    machine: &JsonRpcCartesiMachineClient,
     current_height: u64,
     opt: ExecutorOptions,
     current_cid: &mut Cid,
@@ -554,7 +540,6 @@ async fn subscribe_espresso(
                             tracing::info!("tx.payload().len: {:?}", tx.payload().len());
 
                             handle_tx(
-                                &machine,
                                 opt.clone(),
                                 Some(tx.payload().to_vec()),
                                 current_cid,
@@ -597,7 +582,6 @@ async fn subscribe_espresso(
     }
 }
 async fn subscribe_celestia(
-    machine: &JsonRpcCartesiMachineClient,
     current_height: u64,
     current_chain_info_cid: Arc<Mutex<Option<cid::CidGeneric<64>>>>,
     opt: ExecutorOptions,
@@ -680,7 +664,6 @@ async fn subscribe_celestia(
                                     );
                                     tracing::info!("new blob {:?}", blob);
                                     handle_tx(
-                                        &machine,
                                         opt.clone(),
                                         Some(blob.data),
                                         current_cid,
@@ -724,7 +707,6 @@ async fn subscribe_celestia(
     }
 }
 async fn subscribe_evm_da(
-    machine: &JsonRpcCartesiMachineClient,
     starting_block_height: u64,
     opt: ExecutorOptions,
     current_cid: &mut Cid,
@@ -791,7 +773,6 @@ async fn subscribe_evm_da(
                     );
 
                     handle_tx(
-                        machine,
                         opt.clone(),
                         Some(call_data.to_vec()),
                         current_cid,
@@ -810,7 +791,6 @@ async fn subscribe_evm_da(
 }
 
 async fn subscribe_evm_blocks(
-    machine: &JsonRpcCartesiMachineClient,
     starting_block_height: u64,
     opt: ExecutorOptions,
     current_cid: &mut Cid,
@@ -862,7 +842,6 @@ async fn subscribe_evm_blocks(
             format!("{:?}", block.hash).as_bytes().to_vec(),
         );
         handle_tx(
-            machine,
             opt.clone(),
             Some(Vec::new()),
             current_cid,
