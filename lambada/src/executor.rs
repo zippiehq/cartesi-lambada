@@ -37,6 +37,7 @@ use std::{
     time::SystemTime,
 };
 use tokio::time::sleep;
+use crate::eip4844::TxEip4844;
 
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;
 #[derive(Clone, Debug)]
@@ -879,53 +880,49 @@ async fn subscribe_evm_blocks(
         current_height += 1;
     }
 }
-async fn send_json_rpc_request(
-    client: &Client<HttpConnector>,
-    method: &str,
-    params: Value,
-) -> Result<Value, Box<dyn Error>> {
-    let request_body = json!({
-        "jsonrpc": "2.0",
-        "method": method,
-        "params": params,
-        "id": 1,
-    });
-
-    let response = client
-        .post("http://localhost:3033")
-        .json(&request_body)
-        .send()
-        .await?
-        .json::<Value>()
-        .await?;
-
-    Ok(response["result"].clone())
-}
-
 async fn subscribe_evm_eip4844(
+    machine: &JsonRpcCartesiMachineClient,
     starting_block_height: u64,
-) -> Result<(), Box<dyn Error>> {
-    let client = Client::new();
+    opt: ExecutorOptions,
+    current_cid: &mut Cid,
+    genesis_cid_text: String,
+    rx: Option<Arc<async_std::sync::Mutex<Receiver<(u64, Option<String>)>>>>,
+) {
+    let eth_rpc_url = opt.evm_da_url.clone();
+    let eth_client = Arc::new(
+        Provider::<Http>::try_from(eth_rpc_url)
+            .expect("Could not instantiate Ethereum HTTP Provider"),
+    );
+
     let mut current_height = starting_block_height;
 
-    loop {
-        let latest_block = send_json_rpc_request(&client, "eth_blockNumber", json!([])).await?;
-        let latest_block_number = u64::from_str_radix(latest_block.as_str().unwrap().trim_start_matches("0x"), 16)?;
-        if latest_block_number > current_height {
-            let block = send_json_rpc_request(&client, "eth_getBlockByNumber", json!([latest_block, true])).await?;
+    while current_height < u64::MAX {
+        let latest_block = eth_client.get_block_number().await.expect("Failed to fetch the latest block number");
 
-            if let Some(transactions) = block["transactions"].as_array() {
-                for tx in transactions {
-                    if let Some(_blobs) = tx["blobs"].as_array() {
-                        println!("EIP-4844 transaction found: {:?}", tx);
-                    }
-                }
-            }
-
-            current_height = latest_block_number;
+        if latest_block < current_height.into() {
+            sleep(Duration::from_secs(2)).await;
+            continue;
         }
 
-        sleep(Duration::from_secs(10)).await;
+        let block = eth_client
+            .get_block_with_txs(BlockId::Number(BlockNumber::Number(current_height.into())))
+            .await
+            .expect("Failed to fetch block")
+            .expect("Block not found");
+
+        for tx in &block.transactions {
+            let tx_bytes = tx.rlp();
+            match TxEip4844::decode_enveloped(&mut &tx_bytes[..]) {
+                Ok(eip4844_tx) => {
+                    println!("Detected an EIP-4844 transaction: {:?}", eip4844_tx);
+                },
+                Err(_) => {
+                    println!("Failed to decode EIP-4844 transaction: {:?}", tx_bytes);
+                }
+            }
+        }
+
+        current_height += 1;
     }
 }
 
