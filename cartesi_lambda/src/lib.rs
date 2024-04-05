@@ -31,7 +31,6 @@ pub static mut LAMBADA_WORKER_TX: Option<Arc<Mutex<Sender<ExecuteResultSender>>>
 // execute is the entry point for the computation to be done, we have a particular state CID with it's associated /app directory
 // and a transaction payload + metadata and we want to do this computation and get the new state CID back or an error
 pub async fn execute(
-    machine_url: String,
     ipfs_url: &str,
     ipfs_write_url: &str,
     payload: Option<Vec<u8>>,
@@ -45,17 +44,16 @@ pub async fn execute(
         .map(char::from)
         .collect();
     let execute_parameter = ExecuteParameters {
-        machine_url,
         ipfs_url: ipfs_url.to_string(),
         ipfs_write_url: ipfs_write_url.to_string(),
-        payload,
+        payload: payload.clone(),
         state_cid: state_cid.to_bytes(),
         metadata: metadata
             .iter()
             .map(|(k, v)| (hex::encode(&k), hex::encode(&v)))
             .collect::<HashMap<String, String>>(),
         max_cycles_input: max_cycles_input,
-        identifier,
+        identifier: identifier.clone(),
     };
     tracing::info!("Sending ExecuteParameter to the lambada_worker subprocess");
 
@@ -65,7 +63,6 @@ pub async fn execute(
         parameters: execute_parameter,
         result_sender: Arc::new(Mutex::new(result_sender)),
     };
-
     unsafe {
         LAMBADA_WORKER_TX
             .clone()
@@ -100,7 +97,6 @@ pub fn calculate_sha256(input: &[u8]) -> Vec<u8> {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ExecuteParameters {
-    machine_url: String,
     ipfs_url: String,
     ipfs_write_url: String,
     payload: Option<Vec<u8>>,
@@ -195,7 +191,6 @@ pub fn lambada_worker_subprocess() {
         let _ = task::block_on(async {
             loop {
                 let lambada_worker_stdout = child.stdout.as_mut().unwrap();
-                tracing::info!("Waiting for a response from the lambada_worker");
 
                 if let Ok(execute_result) = read_message(lambada_worker_stdout) {
                     let response =

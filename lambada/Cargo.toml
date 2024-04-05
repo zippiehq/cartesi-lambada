@@ -24,7 +24,6 @@ hyper = { version = "0.14", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3.28"
 hex = "0.4.3"
-cartesi-machine-json-rpc = {git = "https://github.com/cartesi/machine-json-rpc" }
 sequencer = { git = "https://github.com/EspressoSystems/espresso-sequencer" }
 hyper-tls = "0.5.0"
 bincode = "1.3.3"

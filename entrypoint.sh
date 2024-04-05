@@ -44,23 +44,6 @@ if [ -z "$IPFS_WRITE_URL" ]; then
 fi
 export IPFS_WRITE_URL
 
-echo "Running container-local cartesi machine"
-/usr/bin/jsonrpc-remote-cartesi-machine --server-address=127.0.0.1:50051 2>&1 &> /tmp/cartesi-machine.log &
-JSONRPC_HOST="127.0.0.1"
-JSONRPC_PORT="50051"
-while true; do
-    nc -z "$JSONRPC_HOST" "$JSONRPC_PORT"
-    RET=$?
-    echo $RET
-    if [ x$RET = x0 ]; then
-        break
-    fi
-    sleep 0.5
-done
-echo "Cartesi Machine up"
-CARTESI_MACHINE_URL=http://127.0.0.1:50051
-
-
 if [ x$ESPRESSO_TESTNET_SEQUENCER_URL = x ]; then
    ESPRESSO_TESTNET_SEQUENCER_URL=https://query.gibraltar.aws.espresso.network
 fi
@@ -83,5 +66,4 @@ LAMBADA_WORKER=/bin/lambada-worker RUST_LOG=info RUST_BACKTRACE=full /bin/lambad
 	--machine-dir=/data/base-machines/lambada-base-machine \
 	--ipfs-url $IPFS_URL \
 	--evm-da-url $EVM_DA_URL \
-	--cartesi-machine-url $CARTESI_MACHINE_URL \
-	--db-path /data/db/  2>&1 > /tmp/lambada.log
+   --db-path /data/db/  2>&1 > /tmp/lambada.log

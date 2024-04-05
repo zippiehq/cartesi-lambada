@@ -2,7 +2,6 @@ use async_compatibility_layer::logging::{setup_backtrace, setup_logging};
 use async_std::sync::Mutex;
 use async_std::task;
 use cartesi_lambda::{execute, lambada_worker_subprocess};
-use cartesi_machine_json_rpc::client::JsonRpcCartesiMachineClient;
 use celestia_rpc::BlobClient;
 use celestia_types::blob::SubmitOptions;
 use celestia_types::nmt::Namespace;
@@ -47,13 +46,12 @@ async fn start_subscriber(
         callback_node_info: callback_node_info,
         evm_da_url: options.evm_da_url.clone(),
     };
-    let cartesi_machine_url = options.cartesi_machine_url.to_string().clone();
 
     tracing::info!("Subscribing to appchain {:?}", cid.to_string());
     thread::spawn(move || {
         tracing::info!("in thread");
         let _ = task::block_on(async {
-            subscribe(executor_options, cartesi_machine_url.clone(), cid, rx).await;
+            subscribe(executor_options, cid, rx).await;
         });
         tracing::info!("out of thread");
     });
@@ -921,18 +919,12 @@ async fn compute(
     max_cycles: Option<u64>,
     metadata: HashMap<Vec<u8>, Vec<u8>>,
 ) -> Result<Cid, std::io::Error> {
-    let cartesi_machine_url = options.cartesi_machine_url.clone();
     let ipfs_url = options.ipfs_url.as_str();
     let ipfs_write_url = options.ipfs_write_url.as_str();
 
-    let machine = JsonRpcCartesiMachineClient::new(cartesi_machine_url.to_string())
-        .await
-        .unwrap();
-    let forked_machine_url = format!("http://{}", machine.fork().await.unwrap());
     let state_cid = Cid::try_from(cid.clone()).unwrap();
 
     execute(
-        forked_machine_url,
         ipfs_url,
         ipfs_write_url,
         data,

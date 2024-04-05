@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 cid = "0.11.0"
-cartesi-machine-json-rpc = {git = "https://github.com/cartesi/machine-json-rpc" }
+cartesi-machine = { git = "https://github.com/cartesi/dave", branch = "feature/uarch-reset" }
 serde_json = "1.0.100"
 hyper = { version = "0.14", features = ["full"] }
 ipfs-api-backend-hyper = { version = "0.6.0", features = ["with-send-sync"], default-features = false }
@@ -16,7 +16,6 @@ async-std = { version = "1.12", features = ["attributes"] }
 serde-error = "0.1.2"
 nix = { version = "0.28.0", features = ["process"] }
 tracing = "0.1"
-base64 = "0.21.5"
 hex = "0.4.3"
 sha2 = "0.10.8"
 rs-car-ipfs = { git = "https://github.com/zippiehq/rs-car-ipfs" }
@@ -26,3 +25,4 @@ os_pipe = {version = "1.1.5", features = ["io_safety"]}
 polling = "3.5.0"
 rand = "0.8.5"
 async-compatibility-layer = { git = "https://github.com/EspressoSystems/async-compatibility-layer", tag = "1.4.1" }
+hyper-tls = "0.5.0"

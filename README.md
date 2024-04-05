@@ -106,11 +106,11 @@ Start it up:
 
 other terminal:
 
-``curl -X POST -d 'echo hello world' -H "Content-Type: application/octet-stream" -v http://127.0.0.1:3033/compute/bafybeia7mc7zt366ae2s4g7eld7znb6uccsmzugi5tsfwwr7ibxfip72lm``
+``curl -X POST -d 'echo hello world' -H "Content-Type: application/octet-stream" -v http://127.0.0.1:3033/compute/bafybeicxrqr6bd4fxsb2hocjwribo5odftt2m3udfcw3zhnrugx57ey4jq``
 
 # Subscribe to chain and get information on state
 
-Sample \"<appchain\>" is bafybeidripqi4bj3pm6txo5hxkkf2cgs24t6f3aok4nexcenjem6kadg7i
+Sample \"<appchain\>" is bafybeicxrqr6bd4fxsb2hocjwribo5odftt2m3udfcw3zhnrugx57ey4jq
 
 Subscribe to a chain:
   
