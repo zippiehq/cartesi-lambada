@@ -1,8 +1,5 @@
 use ark_serialize::CanonicalSerialize;
 use ethers::prelude::*;
-use hyper::client::HttpConnector;
-use serde_json::json;
-use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
 use surf_disco::Url;
@@ -27,7 +24,6 @@ use sequencer::{SeqTypes, VmId};
 use serde::{Deserialize, Serialize};
 use sqlite::State;
 use std::collections::HashMap;
-use std::error::Error;
 use std::str::FromStr;
 use std::sync::mpsc::Receiver;
 use std::thread;
@@ -37,7 +33,6 @@ use std::{
     time::SystemTime,
 };
 use tokio::time::sleep;
-use crate::eip4844::TxEip4844;
 
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;
 #[derive(Clone, Debug)]
@@ -897,7 +892,10 @@ async fn subscribe_evm_eip4844(
     let mut current_height = starting_block_height;
 
     while current_height < u64::MAX {
-        let latest_block = eth_client.get_block_number().await.expect("Failed to fetch the latest block number");
+        let latest_block = eth_client
+            .get_block_number()
+            .await
+            .expect("Failed to fetch the latest block number");
 
         if latest_block < current_height.into() {
             sleep(Duration::from_secs(2)).await;
@@ -915,7 +913,7 @@ async fn subscribe_evm_eip4844(
             match TxEip4844::decode_enveloped(&mut &tx_bytes[..]) {
                 Ok(eip4844_tx) => {
                     println!("Detected an EIP-4844 transaction: {:?}", eip4844_tx);
-                },
+                }
                 Err(_) => {
                     println!("Failed to decode EIP-4844 transaction: {:?}", tx_bytes);
                 }
