@@ -95,10 +95,6 @@ fn main() {
                         serde_json::from_slice::<ExecuteParameters>(&parameter).unwrap();
                     match unsafe { fork() } {
                         Ok(ForkResult::Parent { child, .. }) => {
-                            tracing::info!(
-                                "Continuing execution in parent process, new child has pid: {}",
-                                child
-                            );
                             drop(reader_for_parent);
                             drop(writer_for_child);
 
@@ -118,6 +114,9 @@ fn main() {
                                     )
                                     .unwrap();
                             }
+                            poller
+                                .modify(&stdin.as_fd(), Event::readable(key.clone() as usize))
+                                .unwrap();
                         }
                         Ok(ForkResult::Child) => {
                             drop(reader_for_child);
@@ -184,9 +183,6 @@ fn main() {
                     drop(stdout);
                 }
                 waitpid(reader_for_child.1 .0, None).unwrap();
-                poller
-                    .modify(&stdin.as_fd(), Event::readable(key.clone() as usize))
-                    .unwrap();
             }
         }
     }
