@@ -37,12 +37,17 @@ pub async fn execute(
     state_cid: Cid,
     metadata: HashMap<Vec<u8>, Vec<u8>>,
     max_cycles_input: Option<u64>,
+    identifier: Option<String>,
 ) -> Result<Cid, std::io::Error> {
-    let identifier: String = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(10)
-        .map(char::from)
-        .collect();
+    let identifier = match identifier {
+        Some(id) => id,
+        None => rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(10)
+            .map(char::from)
+            .collect(),
+    };
+
     let execute_parameter = ExecuteParameters {
         ipfs_url: ipfs_url.to_string(),
         ipfs_write_url: ipfs_write_url.to_string(),
