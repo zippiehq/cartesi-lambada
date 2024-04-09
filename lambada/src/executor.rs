@@ -855,6 +855,54 @@ async fn subscribe_evm_blocks(
         current_height += 1;
     }
 }
+async fn subscribe_evm_eip4844(
+    machine: &JsonRpcCartesiMachineClient,
+    starting_block_height: u64,
+    opt: ExecutorOptions,
+    current_cid: &mut Cid,
+    genesis_cid_text: String,
+    rx: Option<Arc<async_std::sync::Mutex<Receiver<(u64, Option<String>)>>>>,
+) {
+    let eth_rpc_url = opt.evm_da_url.clone();
+    let eth_client = Arc::new(
+        Provider::<Http>::try_from(eth_rpc_url)
+            .expect("Could not instantiate Ethereum HTTP Provider"),
+    );
+
+    let mut current_height = starting_block_height;
+
+    while current_height < u64::MAX {
+        let latest_block = eth_client
+            .get_block_number()
+            .await
+            .expect("Failed to fetch the latest block number");
+
+        if latest_block < current_height.into() {
+            sleep(Duration::from_secs(2)).await;
+            continue;
+        }
+
+        let block = eth_client
+            .get_block_with_txs(BlockId::Number(BlockNumber::Number(current_height.into())))
+            .await
+            .expect("Failed to fetch block")
+            .expect("Block not found");
+
+        for tx in &block.transactions {
+            let tx_bytes = tx.rlp();
+            match TxEip4844::decode_enveloped(&mut &tx_bytes[..]) {
+                Ok(eip4844_tx) => {
+                    println!("Detected an EIP-4844 transaction: {:?}", eip4844_tx);
+                }
+                Err(_) => {
+                    println!("Failed to decode EIP-4844 transaction: {:?}", tx_bytes);
+                }
+            }
+        }
+
+        current_height += 1;
+    }
+}
 
 pub fn calculate_sha256(input: &[u8]) -> Vec<u8> {
     let mut hasher = Sha256::new();
