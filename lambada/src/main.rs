@@ -250,7 +250,16 @@ async fn request_handler(
                     .unwrap()
                     .to_vec();
 
-                match compute(Some(data), options.clone(), cid.to_string(), None, metadata).await {
+                match compute(
+                    Some(data),
+                    options.clone(),
+                    cid.to_string(),
+                    None,
+                    metadata,
+                    None,
+                )
+                .await
+                {
                     Ok(cid) => {
                         let json_response = serde_json::json!({
                             "cid": Cid::try_from(cid).unwrap().to_string(),
@@ -325,6 +334,7 @@ async fn request_handler(
             let mut max_cycles: Option<u64> = None;
             let mut only_warmup: bool = false;
             let mut bincoded: bool = false;
+            let mut identifier: Option<String> = None;
 
             // replaced with bincoded metadata if available
             let mut metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::<Vec<u8>, Vec<u8>>::new();
@@ -335,70 +345,75 @@ async fn request_handler(
             );
 
             for query in parsed_query {
-                if query.0.eq("callback") {
-                    match query.1.parse::<hyper::Uri>() {
-                        Ok(uri) => {
-                            callback_uri = Ok(uri);
-                        }
-                        Err(e) => {
-                            callback_uri = Err(e.to_string());
-                        }
-                    };
-                }
-                if query.0.eq("max_cycles") {
-                    match query.1.parse::<u64>() {
-                        Ok(cycles) => {
-                            max_cycles = Some(cycles);
-                        }
-                        Err(e) => {
-                            tracing::info!("max_cycles should be u64 type");
-                            let json_error = serde_json::json!({
-                                "error": e.to_string(),
-                            });
-                            let json_error = serde_json::to_string(&json_error).unwrap();
-                            return Response::builder()
-                                .status(StatusCode::BAD_REQUEST)
-                                .body(Body::from(json_error))
-                                .unwrap();
-                        }
-                    };
-                }
-
-                if query.0.eq("only_warmup") {
-                    match query.1.parse::<bool>() {
-                        Ok(warmup) => {
-                            only_warmup = warmup;
-                        }
-                        Err(e) => {
-                            tracing::info!("only_warmup should be boolean type");
-                            let json_error = serde_json::json!({
-                                "error": e.to_string(),
-                            });
-                            let json_error = serde_json::to_string(&json_error).unwrap();
-                            return Response::builder()
-                                .status(StatusCode::BAD_REQUEST)
-                                .body(Body::from(json_error))
-                                .unwrap();
-                        }
-                    };
-                }
-                if query.0.eq("bincoded") {
-                    match query.1.parse::<bool>() {
-                        Ok(bincoded_opt) => {
-                            bincoded = bincoded_opt;
-                        }
-                        Err(e) => {
-                            tracing::info!("bincoded should be boolean type");
-                            let json_error = serde_json::json!({
-                                "error": e.to_string(),
-                            });
-                            let json_error = serde_json::to_string(&json_error).unwrap();
-                            return Response::builder()
-                                .status(StatusCode::BAD_REQUEST)
-                                .body(Body::from(json_error))
-                                .unwrap();
-                        }
-                    };
+                match query.0.as_str() {
+                    "callback" => {
+                        match query.1.parse::<hyper::Uri>() {
+                            Ok(uri) => {
+                                callback_uri = Ok(uri);
+                            }
+                            Err(e) => {
+                                callback_uri = Err(e.to_string());
+                            }
+                        };
+                    }
+                    "max_cycles" => {
+                        match query.1.parse::<u64>() {
+                            Ok(cycles) => {
+                                max_cycles = Some(cycles);
+                            }
+                            Err(e) => {
+                                tracing::info!("max_cycles should be u64 type");
+                                let json_error = serde_json::json!({
+                                    "error": e.to_string(),
+                                });
+                                let json_error = serde_json::to_string(&json_error).unwrap();
+                                return Response::builder()
+                                    .status(StatusCode::BAD_REQUEST)
+                                    .body(Body::from(json_error))
+                                    .unwrap();
+                            }
+                        };
+                    }
+                    "identifier" => {
+                        identifier = Some(query.1.clone());
+                    }
+                    "only_warmup" => {
+                        match query.1.parse::<bool>() {
+                            Ok(warmup) => {
+                                only_warmup = warmup;
+                            }
+                            Err(e) => {
+                                tracing::info!("only_warmup should be boolean type");
+                                let json_error = serde_json::json!({
+                                    "error": e.to_string(),
+                                });
+                                let json_error = serde_json::to_string(&json_error).unwrap();
+                                return Response::builder()
+                                    .status(StatusCode::BAD_REQUEST)
+                                    .body(Body::from(json_error))
+                                    .unwrap();
+                            }
+                        };
+                    }
+                    "bincoded" => {
+                        match query.1.parse::<bool>() {
+                            Ok(bincoded_opt) => {
+                                bincoded = bincoded_opt;
+                            }
+                            Err(e) => {
+                                tracing::info!("bincoded should be boolean type");
+                                let json_error = serde_json::json!({
+                                    "error": e.to_string(),
+                                });
+                                let json_error = serde_json::to_string(&json_error).unwrap();
+                                return Response::builder()
+                                    .status(StatusCode::BAD_REQUEST)
+                                    .body(Body::from(json_error))
+                                    .unwrap();
+                            }
+                        };
+                    }
+                    _ => {}
                 }
             }
             let callback_uri = match callback_uri {
@@ -452,6 +467,7 @@ async fn request_handler(
                         cid.to_string(),
                         max_cycles,
                         metadata.clone(),
+                        identifier,
                     )
                     .await
                     {
@@ -918,6 +934,7 @@ async fn compute(
     cid: String,
     max_cycles: Option<u64>,
     metadata: HashMap<Vec<u8>, Vec<u8>>,
+    identifier: Option<String>,
 ) -> Result<Cid, std::io::Error> {
     let ipfs_url = options.ipfs_url.as_str();
     let ipfs_write_url = options.ipfs_write_url.as_str();
@@ -931,6 +948,7 @@ async fn compute(
         state_cid,
         metadata,
         max_cycles,
+        identifier,
     )
     .await
 }
