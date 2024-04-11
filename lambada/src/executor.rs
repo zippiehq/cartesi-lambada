@@ -82,7 +82,7 @@ pub async fn subscribe(
             .unwrap();
             let query = "
         CREATE TABLE IF NOT EXISTS blocks (state_cid BLOB(48) NOT NULL,
-        height INTEGER NOT NULL);
+        height INTEGER NOT NULL, sequencer_block_reference BLOB(48) NOT NULL, finalized BOOL NOT NULL );
     ";
             connection.execute(query).unwrap();
 
@@ -123,12 +123,14 @@ pub async fn subscribe(
             } else {
                 tracing::info!("new chain, not persisted: {:?}", genesis_cid_text);
                 let mut statement = connection
-                    .prepare("INSERT INTO blocks (state_cid, height) VALUES (?, ?)")
+                    .prepare("INSERT INTO blocks (state_cid, height, sequencer_block_reference, finalized) VALUES (?, ?, ?, ?)")
                     .unwrap();
                 statement
                     .bind((1, &current_cid.to_bytes() as &[u8]))
                     .unwrap();
                 statement.bind((2, initial_block_height as i64)).unwrap();
+                statement.bind((3, "")).unwrap();
+                statement.bind((4, 1)).unwrap();
                 statement.next().unwrap();
             }
         }
@@ -321,6 +323,7 @@ async fn handle_tx(
     metadata: HashMap<Vec<u8>, Vec<u8>>,
     height: u64,
     genesis_cid_text: String,
+    block_hash: String,
     rx: Option<Arc<async_std::sync::Mutex<Receiver<(u64, Option<String>)>>>>,
 ) {
     let mut bincoded_compute_data: BincodedCompute = BincodedCompute {
@@ -408,12 +411,16 @@ async fn handle_tx(
     .unwrap();
 
     let mut statement = connection
-        .prepare("INSERT INTO blocks (state_cid, height) VALUES (?, ?)")
+        .prepare(
+            "INSERT INTO blocks (state_cid, height, sequencer_block_reference, finalized) VALUES (?, ?, ?, ?)",
+        )
         .unwrap();
     statement
         .bind((1, &current_cid.to_bytes() as &[u8]))
         .unwrap();
     statement.bind((2, height as i64)).unwrap();
+    statement.bind((3, &block_hash as &str)).unwrap();
+    statement.bind((4, 1)).unwrap();
     statement.next().unwrap();
 }
 async fn is_chain_info_same(
@@ -494,7 +501,10 @@ async fn subscribe_espresso(
 
                 let mut bytes = Vec::new();
                 block.hash().serialize_uncompressed(&mut bytes).unwrap();
-                metadata.insert(calculate_sha256("espresso-block-hash".as_bytes()), bytes);
+                metadata.insert(
+                    calculate_sha256("espresso-block-hash".as_bytes()),
+                    bytes.clone(),
+                );
                 if let Some(info) = block.header().l1_finalized {
                     metadata.insert(
                         calculate_sha256("espresso-l1-block-height".as_bytes()),
@@ -547,6 +557,7 @@ async fn subscribe_espresso(
                                 tx_metadata,
                                 height,
                                 genesis_cid_text.clone(),
+                                hex::encode(bytes.clone()),
                                 rx.clone(),
                             )
                             .await;
@@ -608,7 +619,7 @@ async fn subscribe_celestia(
     let celestia_tx_namespace = chain_vm_id_num.to_be_bytes().to_vec();
     let celestia_tx_count: u64 = 0;
     match client.header_wait_for_height(current_height).await {
-        Ok(_) => {
+        Ok(extended_header) => {
             let mut state = client.header_sync_state().await.unwrap();
             while client
                 .header_wait_for_height(state.height + 1)
@@ -656,7 +667,7 @@ async fn subscribe_celestia(
                                 for blob in blobs {
                                     let mut tx_metadata = metadata.clone();
                                     tx_metadata.insert(
-                                        calculate_sha256("ecelestia-tx-count".as_bytes()),
+                                        calculate_sha256("celestia-tx-count".as_bytes()),
                                         celestia_tx_count.to_be_bytes().to_vec(),
                                     );
                                     tx_metadata.insert(
@@ -671,6 +682,7 @@ async fn subscribe_celestia(
                                         tx_metadata,
                                         state.height,
                                         genesis_cid_text.clone(),
+                                        hex::encode(extended_header.commit.block_id.hash),
                                         rx.clone(),
                                     )
                                     .await;
@@ -780,6 +792,7 @@ async fn subscribe_evm_da(
                         metadata,
                         current_height,
                         genesis_cid_text.clone(),
+                        hex::encode(block.hash.unwrap().0),
                         rx.clone(),
                     )
                     .await;
@@ -849,6 +862,7 @@ async fn subscribe_evm_blocks(
             metadata,
             current_height,
             genesis_cid_text.clone(),
+            hex::encode(block.hash.unwrap().0),
             rx.clone(),
         )
         .await;
