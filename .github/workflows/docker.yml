@@ -51,6 +51,9 @@ jobs:
           RELEASE_DIR=release
         cache-from: type=local,src=/tmp/.buildx-cache
 
+    - name: Run Docker container
+      run: docker run -p 127.0.0.1:3033:3033 -v $PWD/data:/data -e RUN_TESTS=true ${{ env.REGISTRY }}/${{ github.repository }}:latest
+
     - name: Push Docker image to GitHub Packages
       if: github.ref == 'refs/heads/main'
       uses: docker/build-push-action@v2

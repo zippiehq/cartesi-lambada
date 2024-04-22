@@ -60,10 +60,26 @@ mkdir -p /data/db
 mkdir -p /data/db/chains/
 mkdir -p /data/snapshot
 
+if [ "$RUN_TESTS" = "true" ]; then
+   export LAMBADA_WORKER=/bin/lambada-worker
+   export RUST_LOG=info
+   export RUST_BACKTRACE=full
+   /bin/lambada --espresso-testnet-sequencer-url $ESPRESSO_TESTNET_SEQUENCER_URL \
+	   --celestia-testnet-sequencer-url $CELESTIA_TESTNET_SEQUENCER_URL \
+	   --machine-dir=/data/base-machines/lambada-base-machine \
+	   --ipfs-url $IPFS_URL \
+	   --evm-da-url $EVM_DA_URL \
+      --db-path /data/db/ 2>&1 > /tmp/lambada.log &
 
-LAMBADA_WORKER=/bin/lambada-worker RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --espresso-testnet-sequencer-url $ESPRESSO_TESTNET_SEQUENCER_URL \
-	--celestia-testnet-sequencer-url $CELESTIA_TESTNET_SEQUENCER_URL \
-	--machine-dir=/data/base-machines/lambada-base-machine \
-	--ipfs-url $IPFS_URL \
-	--evm-da-url $EVM_DA_URL \
-   --db-path /data/db/  2>&1 > /tmp/lambada.log
+   sleep 240
+      export SERVER_ADDRESS=http://127.0.0.1:3033
+   /bin/lambada_test --test-threads=1 --nocapture 
+
+else
+   LAMBADA_WORKER=/bin/lambada-worker RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --espresso-testnet-sequencer-url $ESPRESSO_TESTNET_SEQUENCER_URL \
+	   --celestia-testnet-sequencer-url $CELESTIA_TESTNET_SEQUENCER_URL \
+	   --machine-dir=/data/base-machines/lambada-base-machine \
+	   --ipfs-url $IPFS_URL \
+	   --evm-da-url $EVM_DA_URL \
+      --db-path /data/db/  2>&1 > /tmp/lambada.log
+fi
