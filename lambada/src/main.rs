@@ -821,20 +821,35 @@ async fn request_handler(
                         let client: surf_disco::Client<tide_disco::error::ServerError> =
                             surf_disco::Client::new(url);
 
-                        let res = client
+                        match client
                             .post::<()>("submit/submit")
                             .body_binary(&txn)
                             .unwrap()
                             .send()
-                            .await;
-
-                        tracing::info!("submitting result {:?}", res);
-
-                        let json_response = serde_json::json!({
-                            "hash": txn.commit(),
-                        });
-                        let json_response = serde_json::to_string(&json_response).unwrap();
-                        return Response::builder().body(Body::from(json_response)).unwrap();
+                            .await
+                        {
+                            Ok(response) => {
+                                tracing::info!("submitting result {:?}", response);
+                                let json_response = serde_json::json!({
+                                    "hash": txn.commit(),
+                                });
+                                let json_response = serde_json::to_string(&json_response).unwrap();
+                                return Response::builder()
+                                    .body(Body::from(json_response))
+                                    .unwrap();
+                            }
+                            Err(e) => {
+                                let json_submitting_result = serde_json::json!({
+                                    "result": e.to_string(),
+                                });
+                                let json_submitting_result =
+                                    serde_json::to_string(&json_submitting_result).unwrap();
+                                return Response::builder()
+                                    .status(StatusCode::CONFLICT)
+                                    .body(Body::from(json_submitting_result))
+                                    .unwrap();
+                            }
+                        }
                     }
                     "celestia" => {
                         let token = match std::env::var("CELESTIA_TESTNET_NODE_AUTH_TOKEN_WRITE") {
