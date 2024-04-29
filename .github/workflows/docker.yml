@@ -5,8 +5,8 @@ on:
     branches:
       - main
   pull_request:
-    branches: 
-      - '*' 
+    branches:
+      - '*'
 
 env:
   REGISTRY: ghcr.io
@@ -54,6 +54,31 @@ jobs:
     - name: Run Docker container
       run: docker run -p 127.0.0.1:3033:3033 -v $PWD/data:/data -e RUN_TESTS=true ${{ env.REGISTRY }}/${{ github.repository }}:latest
 
+    - name: Copy and handle logs
+      if: ${{ always() }}
+      run: |
+          CONTAINER_ID=$(docker ps -aq --latest --filter "status=exited")
+          if [ -z "$CONTAINER_ID" ]; then
+            echo "No recently exited containers found."
+            exit 1
+          fi
+          docker cp $CONTAINER_ID:/tmp/ /tmp/container_tmp/
+          mkdir -p /tmp/logs
+          find /tmp/container_tmp/ -name "*.log" -exec mv {} /tmp/logs/ \;
+          if [ "$(ls -A /tmp/logs/)" ]; then
+            zip -j /tmp/log-files.zip /tmp/logs/*.log
+            echo "Logs zipped successfully."
+          else
+            echo "No log files found"
+          fi
+
+    - name: Upload logs
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: log-files.zip
+        path: /tmp/log-files.zip
+
     - name: Push Docker image to GitHub Packages
       if: github.ref == 'refs/heads/main'
       uses: docker/build-push-action@v2
@@ -74,4 +99,3 @@ jobs:
         if [ -d "/tmp/.buildx-cache-new" ]; then
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
         fi
-
