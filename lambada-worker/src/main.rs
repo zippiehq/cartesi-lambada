@@ -39,6 +39,7 @@ const METADATA: u16 = 0x22;
 const KECCAK256_NAMESPACE: u16 = 0x23;
 const EXTERNALIZE_STATE: u16 = 0x24;
 const IPFS_GET_BLOCK: u16 = 0x25;
+const HINT: u16 = 0x26;
 
 const PMA_CMIO_RX_BUFFER_START_DEF: u64 = 0x60000000;
 const PMA_CMIO_TX_BUFFER_START_DEF: u64 = 0x60800000;
@@ -369,17 +370,17 @@ async fn execute(
         );
 
         machine_loaded_state = 2;
-    } else if std::path::Path::new(&format!("/data/snapshot/{}_bootedup", base_image)).exists() {
+    } else if std::path::Path::new(&format!("/data/snapshot/{}_get_app", base_image)).exists() {
         // There is a snapshot of this base machine initialized and waiting to be populated with an app that'll initialize (LOAD_APP)
-        while std::path::Path::new(&format!("/data/snapshot/{}_bootedup.lock", base_image)).exists()
+        while std::path::Path::new(&format!("/data/snapshot/{}_get_app.lock", base_image)).exists()
         {
-            tracing::info!("waiting for {}_bootedup.lock", base_image);
+            tracing::info!("waiting for {}_get_app.lock", base_image);
             thread::sleep(std::time::Duration::from_millis(500));
         }
         let before_load_machine = SystemTime::now();
         machine = Some(
             Machine::load(
-                std::path::Path::new(&format!("/data/snapshot/{}_bootedup", base_image).as_str()),
+                std::path::Path::new(&format!("/data/snapshot/{}_get_app", base_image).as_str()),
                 RuntimeConfig {
                     skip_root_hash_check: true,
                     skip_root_hash_store: true,
@@ -535,6 +536,62 @@ async fn execute(
             }
             HTIF_YIELD_MANUAL_REASON_RX_ACCEPTED_DEF => {
                 tracing::info!("HTIF_YIELD_MANUAL_REASON_RX_ACCEPTED_DEF");
+                if !std::path::Path::new(&format!(
+                    "/data/snapshot/{}_{}.lock",
+                    base_image.as_str(),
+                    app_cid.clone().to_string()
+                ))
+                .exists()
+                    && !std::path::Path::new(&format!(
+                        "/data/snapshot/{}_{}.lock",
+                        base_image.as_str(),
+                        app_cid.clone().to_string()
+                    ))
+                    .exists()
+                    && (machine_loaded_state == 0 || machine_loaded_state == 1)
+                {
+                    if std::fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .create_new(true)
+                        .open(format!(
+                            "/data/snapshot/{}_{}.lock",
+                            base_image,
+                            app_cid.clone().to_string()
+                        ))
+                        .is_ok()
+                    {
+                        match unsafe { fork() } {
+                            Ok(ForkResult::Parent { child, .. }) => {}
+                            Ok(ForkResult::Child) => {
+                                let _ = setsid().unwrap();
+                                machine
+                                    .store(Path::new(&format!(
+                                        "/data/snapshot/{}_{}",
+                                        base_image,
+                                        app_cid.clone().to_string(),
+                                    )))
+                                    .unwrap();
+                                std::fs::remove_file(format!(
+                                    "/data/snapshot/{}_{}.lock",
+                                    base_image,
+                                    app_cid.clone().to_string()
+                                ))
+                                .unwrap();
+                                tracing::info!("done snapshotting app {}", app_cid.clone());
+                                std::process::exit(0);
+                            }
+                            Err(_) => {}
+                        }
+                    } else {
+                        tracing::info!(
+                            "did not manage to create lock, snapshot might already be in progress"
+                        );
+                    }
+                } else {
+                    tracing::info!("snapshot of app already being stored or stored, skipping snapshot (lock file exists)")
+                }
+
                 let payload = payload.clone().unwrap_or_default();
                 let encoded = encode_evm_advance(payload);
                 tracing::info!("evm encoded {}", hex::encode(encoded.clone()));
@@ -629,712 +686,65 @@ async fn execute(
                     .unwrap();
                 tracing::info!("metadata info was written");
             }
+            HINT => {
+                let hint = machine
+                    .read_memory(PMA_CMIO_TX_BUFFER_START_DEF, length)
+                    .unwrap();
+
+                let hint_str = String::from_utf8(hint).unwrap();
+                if hint_str == "get_app" {
+                    if !std::path::Path::new(&format!("/data/snapshot/{}_get_app", base_image))
+                        .exists()
+                        && !std::path::Path::new(&format!(
+                            "/data/snapshot/{}_get_app.lock",
+                            base_image
+                        ))
+                        .exists()
+                        && machine_loaded_state == 0
+                    {
+                        if std::fs::OpenOptions::new()
+                            .read(true)
+                            .write(true)
+                            .create_new(true)
+                            .open(format!("/data/snapshot/{}_get_app.lock", base_image))
+                            .is_ok()
+                        {
+                            match unsafe { fork() } {
+                                Ok(ForkResult::Parent { child, .. }) => {}
+                                Ok(ForkResult::Child) => {
+                                    let _ = setsid().unwrap();
+                                    machine
+                                        .store(Path::new(&format!(
+                                            "/data/snapshot/{}_get_app",
+                                            base_image
+                                        )))
+                                        .unwrap();
+                                    std::fs::remove_file(format!(
+                                        "/data/snapshot/{}_get_app.lock",
+                                        base_image
+                                    ))
+                                    .unwrap();
+                                    tracing::info!("done snapshotting {}_get_app", base_image);
+                                    std::process::exit(0);
+                                }
+                                Err(_) => {}
+                            }
+                        }
+                    } else {
+                        tracing::info!(
+                            "snapshot of base already exists or lock file exists, skipping"
+                        );
+                    }
+                    machine.send_cmio_response(0, &[]).unwrap();
+                }
+            }
             _ => {
                 // XXX this should be a fatal error
                 tracing::info!("unknown reason {:?}", reason)
             }
         }
         /*
-
-            // Handles the EXCEPTION case coming from VM/guest:
-            // 1. Destroys the current state of the machine, releasing any resources it was using.
-            // 2. Shuts down the machine, ensuring all ongoing processes are terminated.
-            // 3. Returns an error of type `std::io::Error` with the kind `std::io::ErrorKind::Other`, indicating a general error, and a message "exception" to signify that an exception occurred.
-            EXCEPTION => {
-                tracing::info!("HTIF_YIELD_REASON_TX_EXCEPTION");
-                drop(machine);
-                return Err(serde_error::Error::new(&std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "exception",
-                )));
-            }
-            // Handles the LOAD_TX action coming from VM/guest:
-            // 1. Checks if the `machine_loaded_state` is either 0 or 1 [TODO: explain this better]:. If true, performs the following:
-            //    a. Converts `app_cid` to a `Cid' so we can get it in text form.
-            //    b. Stores a snapshot of the current state to a directory named after `app_cid` under `/data/snapshot/`, prefixed with base_.
-            // 2. Converts `state_cid` to a `Cid` type and calculates its byte length as `cid_length`.
-            // 3. Writes `cid_length` as big-endian bytes into the machine's memory at `MACHINE_IO_ADDRESSS`.
-            // 4. Writes the bytes of `current_cid` to the machine's memory at `MACHINE_IO_ADDRESSS + 8`.
-            // 5. Calculates the length of `payload` as `payload_length` and writes it as big-endian bytes into the machine's memory at `MACHINE_IO_ADDRESSS + 16 + cid_length`.
-            // 6. Writes the `payload` bytes to the machine's memory at `MACHINE_IO_ADDRESSS + 24 + cid_length`.
-            // 7. Converts the block number from `block_info` to big-endian bytes and writes it to the machine's memory at `MACHINE_IO_ADDRESSS + 24 + cid_length + payload_length`.
-            // 8. Initializes a `block_timestamp` vector of 32 bytes and fills it with the big-endian representation of the timestamp from `block_info`.
-            // 9. Writes the `block_timestamp` bytes to the machine's memory at `MACHINE_IO_ADDRESSS + 32 + cid_length + payload_length`.
-            // 10. Extracts the `hash` from `block_info` and writes it to the machine's memory at `MACHINE_IO_ADDRESSS + 32 + block_timestamp.len() + cid_length + payload_length`.
-            LOAD_TX => {
-                tracing::info!("LOAD_TX");
-                if !std::path::Path::new(&format!(
-                    "/data/snapshot/{}_{}.lock",
-                    base_image.as_str(),
-                    app_cid.clone().to_string()
-                ))
-                .exists()
-                    && !std::path::Path::new(&format!(
-                        "/data/snapshot/{}_{}.lock",
-                        base_image.as_str(),
-                        app_cid.clone().to_string()
-                    ))
-                    .exists()
-                    && (machine_loaded_state == 0 || machine_loaded_state == 1)
-                {
-                    if std::fs::OpenOptions::new()
-                        .read(true)
-                        .write(true)
-                        .create_new(true)
-                        .open(format!(
-                            "/data/snapshot/{}_{}.lock",
-                            base_image,
-                            app_cid.clone().to_string()
-                        ))
-                        .is_ok()
-                    {
-                        match unsafe { fork() } {
-                            Ok(ForkResult::Parent { child, .. }) => {}
-                            Ok(ForkResult::Child) => {
-                                let _ = setsid().unwrap();
-                                machine
-                                    .store(Path::new(&format!(
-                                        "/data/snapshot/{}_{}",
-                                        base_image,
-                                        app_cid.clone().to_string(),
-                                    )))
-                                    .unwrap();
-                                std::fs::remove_file(format!(
-                                    "/data/snapshot/{}_{}.lock",
-                                    base_image,
-                                    app_cid.clone().to_string()
-                                ))
-                                .unwrap();
-                                tracing::info!("done snapshotting app {}", app_cid.clone());
-                                std::process::exit(0);
-                            }
-                            Err(_) => {}
-                        }
-                    } else {
-                        tracing::info!(
-                            "did not manage to create lock, snapshot might already be in progress"
-                        );
-                    }
-                } else {
-                    tracing::info!("snapshot of app already being stored or stored, skipping snapshot (lock file exists)")
-                }
-                if payload.is_none() {
-                    drop(machine);
-                    return Ok(Vec::new());
-                }
-                let cid_length = state_cid.clone().to_bytes().len() as u64;
-                let time_before_write_cid_length = SystemTime::now();
-
-                machine
-                    .write_memory(MACHINE_IO_ADDRESSS, &cid_length.to_be_bytes().to_vec())
-                    .unwrap();
-                let time_after_write_cid_length = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(cid_length.to_be_bytes().to_vec())) (writing encoded cid length) took {} milliseconds",
-                        time_after_write_cid_length
-                        .duration_since(time_before_write_cid_length)
-                        .unwrap()
-                        .as_millis()
-                    );
-                }
-
-                let time_before_write_state_cid = SystemTime::now();
-
-                machine
-                    .write_memory(MACHINE_IO_ADDRESSS + 8, &state_cid.clone().to_bytes())
-                    .unwrap();
-                let time_after_write_state_cid = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "write_memory(MACHINE_IO_ADDRESSS + 8, STANDARD.encode(state_cid.clone().to_bytes()),)(writing encoded cid) took {} milliseconds",
-                        time_after_write_state_cid
-                        .duration_since(time_before_write_state_cid)
-                        .unwrap()
-                        .as_millis()
-                    );
-                }
-
-                let payload_length = payload.clone().unwrap().len() as u64;
-
-                let time_before_write_payload_length = SystemTime::now();
-
-                machine
-                    .write_memory(
-                        MACHINE_IO_ADDRESSS + 16 + cid_length,
-                        &payload_length.to_be_bytes().to_vec(),
-                    )
-                    .unwrap();
-                let time_after_write_payload_length = SystemTime::now();
-
-                if measure_execution_time {
-                    tracing::info!(
-                        "write_memory(MACHINE_IO_ADDRESSS + 16 + cid_length, STANDARD.encode(payload_length.to_be_bytes().to_vec()))(writing payload length) took {} milliseconds",
-                        time_after_write_payload_length
-                        .duration_since(time_before_write_payload_length)
-                        .unwrap()
-                        .as_millis()
-                    );
-                }
-
-                let time_before_write_payload = SystemTime::now();
-
-                machine
-                    .write_memory(
-                        MACHINE_IO_ADDRESSS + 24 + cid_length,
-                        &payload.clone().unwrap(),
-                    )
-                    .unwrap();
-
-                let time_after_write_payload = SystemTime::now();
-
-                if measure_execution_time {
-                    tracing::info!(
-                            "write_memory(MACHINE_IO_ADDRESSS + 24 + cid_length, STANDARD.encode(payload.clone().unwrap()))(writing payload) took {} milliseconds",
-                            time_after_write_payload
-                        .duration_since(time_before_write_payload)
-                        .unwrap()
-                        .as_millis()
-                        );
-                }
-
-                tracing::info!("load_tx info was written");
-            }
-            // FINISH: The guest has finished execution and reported back a status code, accept or rejection of the transaction.
-            // It also reports back the current IPFS CID of the state which we return to the consumer of this function.
-            FINISH => {
-                tracing::info!("FINISH");
-                let time_before_read_status = SystemTime::now();
-
-                let status = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-                let time_after_read_status = SystemTime::now();
-
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading status) took {} milliseconds",
-                        time_after_read_status
-                        .duration_since(time_before_read_status)
-                        .unwrap()
-                        .as_millis()
-                    );
-                }
-
-                let time_before_read_data_length = SystemTime::now();
-
-                let length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 16, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-                let time_after_read_data_length = SystemTime::now();
-
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading status) took {} milliseconds",
-                        time_after_read_data_length
-                        .duration_since(time_before_read_data_length)
-                        .unwrap()
-                        .as_millis()
-                    );
-                }
-
-                let time_before_read_data = SystemTime::now();
-
-                let data = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 24, length)
-                    .unwrap();
-                let time_after_read_data = SystemTime::now();
-
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 24, length)(reading data) took {} milliseconds",
-                        time_after_read_data
-                        .duration_since(time_before_read_data)
-                        .unwrap()
-                        .as_millis()
-                    );
-                }
-
-                match status {
-                    0 => {
-                        tracing::info!("HTIF_YIELD_REASON_RX_ACCEPTED");
-                        drop(machine);
-                        tracing::info!(
-                            "FINISH received cid {}",
-                            Cid::try_from(data.clone()).unwrap()
-                        );
-                        return Ok(data);
-                    }
-                    1 => {
-                        tracing::info!("HTIF_YIELD_REASON_RX_REJECTED");
-                        drop(machine);
-                        return Err(serde_error::Error::new(&std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            "transaction was rejected",
-                        )));
-                    }
-                    _ => {
-                        drop(machine);
-                        return Err(serde_error::Error::new(&std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            "unknown status",
-                        )));
-                    }
-                }
-            }
-            // WRITE_BLOCK:
-            // 1. Reads an 8-byte value from the machine's memory at a specified address offset (MACHINE_IO_ADDRESSS + 8).
-            // 2. Converts this 8-byte value from big-endian format to a u64 representing the length of the data to be written.
-            // 3. Reads a block of memory from the machine, starting at a specified address offset (MACHINE_IO_ADDRESSS + 16) and of the previously determined length.
-            // 4. Creates a Cursor wrapped around the cloned memory block. This Cursor is used to facilitate reading the data as a stream.
-            // 5. Invokes the 'block_put' method of a IPFS client with the Cursor as an argument, which stores the block using the data stream.
-            WRITE_BLOCK => {
-                tracing::info!("WRITE_BLOCK");
-                let time_before_read_data_length = SystemTime::now();
-
-                let length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-                let time_after_read_data_length = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading data length) took {} milliseconds",
-                        time_after_read_data_length
-                            .duration_since(time_before_read_data_length)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-
-                let time_before_read_data = SystemTime::now();
-
-                let memory = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 16, length)
-                    .unwrap();
-
-                let time_after_read_data = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                            "read_memory(MACHINE_IO_ADDRESSS + 16, length)(reading data ) took {} milliseconds",
-                            time_after_read_data
-                                .duration_since(time_before_read_data)
-                                .unwrap()
-                                .as_millis()
-                        );
-                }
-
-                let data = Cursor::new(memory.clone());
-                let time_before_putting_block = SystemTime::now();
-
-                let put_response = write_client.block_put(data).await.unwrap();
-                let time_after_putting_block = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "block_put(data)(putting data) took {} milliseconds",
-                        time_after_putting_block
-                            .duration_since(time_before_putting_block)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-            }
-            // op LOAD_APP is a signal from the base image that it's ready to be told which app CID to attempt to initialize
-            // This results in length of app CID (BE u64) and the CID itself being written into the flash drive
-            // If a snapshot doesn't exist for the base image being in LOAD_APP mode, it's done
-            LOAD_APP => {
-                tracing::info!("LOAD_APP");
-
-                if !std::path::Path::new(&format!("/data/snapshot/{}_bootedup", base_image))
-                    .exists()
-                    && !std::path::Path::new(&format!(
-                        "/data/snapshot/{}_bootedup.lock",
-                        base_image
-                    ))
-                    .exists()
-                    && machine_loaded_state == 0
-                {
-                    if std::fs::OpenOptions::new()
-                        .read(true)
-                        .write(true)
-                        .create_new(true)
-                        .open(format!("/data/snapshot/{}_bootedup.lock", base_image))
-                        .is_ok()
-                    {
-                        match unsafe { fork() } {
-                            Ok(ForkResult::Parent { child, .. }) => {}
-                            Ok(ForkResult::Child) => {
-                                let _ = setsid().unwrap();
-                                machine
-                                    .store(Path::new(&format!(
-                                        "/data/snapshot/{}_bootedup",
-                                        base_image
-                                    )))
-                                    .unwrap();
-                                std::fs::remove_file(format!(
-                                    "/data/snapshot/{}_bootedup.lock",
-                                    base_image
-                                ))
-                                .unwrap();
-                                tracing::info!("done snapshotting {}_bootedup", base_image);
-                                std::process::exit(0);
-                            }
-                            Err(_) => {}
-                        }
-                    }
-                } else {
-                    tracing::info!("snapshot of base already exists or lock file exists, skipping");
-                }
-                let app_cid: cid::CidGeneric<64> = Cid::try_from(app_cid.clone()).unwrap();
-
-                tracing::info!("app cid {:?}", Cid::try_from(app_cid.clone()).unwrap());
-                let cid_length = app_cid.clone().to_bytes().len() as u64;
-                let time_before_writing_cid_length = SystemTime::now();
-
-                machine
-                    .write_memory(MACHINE_IO_ADDRESSS, &cid_length.to_be_bytes().to_vec())
-                    .unwrap();
-                let time_after_writing_cid_length = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(cid_length.to_be_bytes().to_vec()))(writing cid length) took {} milliseconds",
-                        time_after_writing_cid_length
-                            .duration_since(time_before_writing_cid_length)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-
-                let time_before_writing_app_cid = SystemTime::now();
-                machine
-                    .write_memory(MACHINE_IO_ADDRESSS + 8, &app_cid.clone().to_bytes())
-                    .unwrap();
-                let time_after_writing_app_cid = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "write_memory(MACHINE_IO_ADDRESSS + 8, STANDARD.encode(app_cid.clone().to_bytes()),)(writing cid length) took {} milliseconds",
-                        time_after_writing_app_cid
-                            .duration_since(time_before_writing_app_cid)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-
-                tracing::info!("load app info was written");
-            }
-
-            // This is currently a null-op, but HINT is meant to tell the host / dehashing database/provider that there's an expectation
-            // that certain hashes/CIDs are available for dehashing/resolving
-            // In memory this is a BE u64 value of length of payload
-            HINT => {
-                tracing::info!("HINT");
-                let time_before_reading_payload_length = SystemTime::now();
-
-                let payload_length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-                let time_after_reading_payload_length = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading payload length) took {} milliseconds",
-                        time_after_reading_payload_length
-                            .duration_since(time_before_reading_payload_length)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-
-                let time_before_reading_payload = SystemTime::now();
-
-                let payload = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 16, payload_length)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-
-                let time_after_reading_payload = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 16, payload_length)(reading payload) took {} milliseconds",
-                        time_after_reading_payload
-                            .duration_since(time_before_reading_payload)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-
-                tracing::info!("hint payload {:?}", payload);
-            }
-            // Handles the GET_METADATA action:
-            // 1. Reads a 64-bit value from the specified memory address (MACHINE_IO_ADDRESSS + 8) and converts it from big-endian to a u64, representing the length of a metadata key
-            // 2. Reads the metadata key of the specified length from memory starting at MACHINE_IO_ADDRESSS + 16
-            // 3. Fetches the metadata associated with the key
-            // 4. Writes the retrieved metadata back into the machine's memory at MACHINE_IO_ADDRESSS + 16, encoding using the STANDARD base64 (due to jsonrpc).
-            // 5. Writes the length of the metadata as a big-endian byte array into the machine's memory at MACHINE_IO_ADDRESSS, also using the STANDARD encoding.
-            //
-            // Unavailable metadata should kill the machine, data requested by machine is assumed to be available.
-            GET_METADATA => {
-                tracing::info!("GET_METADATA");
-                let time_before_reading_metadata_key_length = SystemTime::now();
-
-                let length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-                let time_after_reading_metadata_key_length = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading metadata key length) took {} milliseconds",
-                        time_after_reading_metadata_key_length
-                            .duration_since(time_before_reading_metadata_key_length)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-
-                let time_before_reading_metadata_key = SystemTime::now();
-
-                let metadata_key = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 16, length)
-                    .unwrap();
-
-                let time_after_reading_metadata_key = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 16, length)(reading metadata key) took {} milliseconds",
-                        time_after_reading_metadata_key
-                            .duration_since(time_before_reading_metadata_key)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-
-                tracing::info!("read metadata: {:?}", hex::encode(metadata_key.clone()));
-
-                let metadata_result = metadata.get(&metadata_key).unwrap(); // handle this a bit better
-                tracing::info!("metadata len {:?}", metadata_result.len());
-                let time_before_writing_metadata = SystemTime::now();
-                machine
-                    .write_memory(MACHINE_IO_ADDRESSS + 16, &(metadata_result.clone()))
-                    .unwrap();
-                let time_after_writing_metadata = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "write_memory(MACHINE_IO_ADDRESSS + 16, STANDARD.encode(metadata_result.clone()))(writing encoded metadata) took {} milliseconds",
-                        time_after_writing_metadata
-                            .duration_since(time_before_writing_metadata)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-
-                let time_before_writing_metadata_length = SystemTime::now();
-                machine
-                    .write_memory(
-                        MACHINE_IO_ADDRESSS,
-                        &(metadata_result.len().to_be_bytes().to_vec()),
-                    )
-                    .unwrap();
-                let time_after_writing_metadata_length = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(metadata_result.len().to_be_bytes().to_vec()))(writing encoded metadata length) took {} milliseconds",
-                        time_after_writing_metadata_length
-                            .duration_since(time_before_writing_metadata_length)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-                tracing::info!("metadata info was written");
-            }
-            /*SPAWN_COMPUTE => {
-                let length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-
-                let cid_bytes = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 16, length)
-                    .unwrap();
-                let cid = Cid::try_from(cid_bytes.clone()).unwrap();
-
-                let payload_length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 16 + length, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-
-                let payload = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 24 + length, payload_length)
-                    .unwrap();
-                let ipfs_url = Arc::new(Mutex::new(ipfs_url.to_string()));
-                let ipfs_write_url = Arc::new(Mutex::new(ipfs_write_url.to_string()));
-                let machine_url = Arc::new(Mutex::new(machine_url.clone()));
-
-                let mut hasher = Sha256::new();
-                hasher.update(cid_bytes);
-                hasher.update(payload.clone());
-                let thread_hash = hasher.finalize().to_vec();
-
-                thread_execute.insert(
-                    thread_hash,
-                    thread::spawn(move || {
-                        let ipfs_url = Arc::clone(&ipfs_url);
-                        let ipfs_write_url = Arc::clone(&ipfs_write_url);
-                        let machine_url = Arc::clone(&machine_url);
-
-                        task::block_on(async {
-                            let mut metadata: HashMap<Vec<u8>, Vec<u8>> =
-                                HashMap::<Vec<u8>, Vec<u8>>::new();
-
-                            metadata.insert(
-                                calculate_sha256("sequencer".as_bytes()),
-                                calculate_sha256("spawn".as_bytes()),
-                            );
-                            execute(
-                                machine_url.lock().await.clone(),
-                                ipfs_url.lock().await.clone().as_str(),
-                                ipfs_write_url.lock().await.clone().as_str(),
-                                Some(payload),
-                                cid,
-                                metadata,
-                                max_cycles_input,
-                            )
-                            .await
-                        })
-                    }),
-                );
-            }
-            JOIN_COMPUTE => {
-                let length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-
-                let cid_bytes = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 16, length)
-                    .unwrap();
-                let cid = Cid::try_from(cid_bytes.clone()).unwrap();
-
-                let payload_length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 16 + length, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-
-                let payload = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 24 + length, payload_length)
-                    .unwrap();
-                let ipfs_url = Arc::new(Mutex::new(ipfs_url.to_string()));
-                let ipfs_write_url = Arc::new(Mutex::new(ipfs_write_url.to_string()));
-                let machine_url = Arc::new(Mutex::new(machine_url.clone()));
-
-                let mut hasher = Sha256::new();
-                hasher.update(cid_bytes);
-                hasher.update(payload.clone());
-                let thread_hash = hasher.finalize().to_vec();
-
-                let mut execute_result = None;
-                if let Some(thread) = thread_execute.remove(&thread_hash) {
-                    execute_result = Some(thread.join().unwrap());
-                } else {
-                    execute_result = Some(
-                        thread::spawn(move || {
-                            let ipfs_url = Arc::clone(&ipfs_url);
-                            let ipfs_write_url = Arc::clone(&ipfs_write_url);
-                            let machine_url = Arc::clone(&machine_url);
-
-                            task::block_on(async {
-                                let mut metadata: HashMap<Vec<u8>, Vec<u8>> =
-                                    HashMap::<Vec<u8>, Vec<u8>>::new();
-
-                                metadata.insert(
-                                    calculate_sha256("sequencer".as_bytes()),
-                                    calculate_sha256("spawn".as_bytes()),
-                                );
-                                execute(
-                                    machine_url.lock().await.clone(),
-                                    ipfs_url.lock().await.clone().as_str(),
-                                    ipfs_write_url.lock().await.clone().as_str(),
-                                    Some(payload),
-                                    cid,
-                                    metadata,
-                                    max_cycles_input,
-                                )
-                                .await
-                            })
-                        })
-                        .join()
-                        .unwrap(),
-                    )
-                }
-
-                match execute_result.unwrap() {
-                    Ok(cid) => {
-                        machine
-                            .write_memory(
-                                MACHINE_IO_ADDRESSS + 8,
-                                STANDARD.encode(0_u64.to_be_bytes()),
-                            )
-                            .await
-                            .unwrap();
-
-                        machine
-                            .write_memory(
-                                MACHINE_IO_ADDRESSS + 16,
-                                STANDARD.encode(cid.len().to_be_bytes()),
-                            )
-                            .await
-                            .unwrap();
-
-                        machine
-                            .write_memory(MACHINE_IO_ADDRESSS + 24, STANDARD.encode(cid))
-                            .await
-                            .unwrap();
-                    }
-                    Err(_) => {
-                        machine
-                            .write_memory(
-                                MACHINE_IO_ADDRESSS + 8,
-                                STANDARD.encode(1_u64.to_be_bytes()),
-                            )
-                            .await
-                            .unwrap();
-                    }
-                }
-            }
-            */
-            GET_DATA => {
+        GET_DATA => {
                 tracing::info!("GET_DATA");
                 let namespace = u64::from_be_bytes(
                     machine
@@ -1386,10 +796,6 @@ async fn execute(
                 } else {
                     panic!("unknown namespace");
                 }
-            }
-            _ => {
-                // XXX this should be a fatal error
-                tracing::info!("unknown opt {:?}", opt)
             }
         }
         */
