@@ -738,67 +738,37 @@ async fn execute(
                     machine.send_cmio_response(0, &[]).unwrap();
                 }
             }
+            KECCAK256_NAMESPACE => {
+                let id = machine
+                    .read_memory(PMA_CMIO_TX_BUFFER_START_DEF, length)
+                    .unwrap();
+                // XXX this id is a string, it should really be bytes
+                let https = HttpsConnector::new();
+                let client = Client::builder().build::<_, hyper::Body>(https);
+
+                // XXX this is bad
+                let uri: String = format!(
+                    "{}/dehash/{}",
+                    std::env::var("KECCAK256_SOURCE").unwrap(),
+                    std::str::from_utf8(id.as_slice()).unwrap()
+                )
+                .parse()
+                .unwrap();
+
+                let block_req = Request::builder()
+                    .method("GET")
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap();
+                let block_response = client.request(block_req).await.unwrap();
+                let body_bytes = hyper::body::to_bytes(block_response).await.unwrap();
+                machine.send_cmio_response(0, &body_bytes).unwrap();
+            }
             _ => {
                 // XXX this should be a fatal error
                 tracing::info!("unknown reason {:?}", reason)
             }
         }
-        /*
-        GET_DATA => {
-                tracing::info!("GET_DATA");
-                let namespace = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-                let id_length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 16, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-                let id = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 24, id_length)
-                    .unwrap();
-
-                if namespace == NAMESPACE_KECCAK256 {
-                    let https = HttpsConnector::new();
-                    let client = Client::builder().build::<_, hyper::Body>(https);
-
-                    // XXX this is bad
-                    let uri: String = format!(
-                        "{}/dehash/{}",
-                        std::env::var("KECCAK256_SOURCE").unwrap(),
-                        std::str::from_utf8(id.as_slice()).unwrap()
-                    )
-                    .parse()
-                    .unwrap();
-
-                    let block_req = Request::builder()
-                        .method("GET")
-                        .uri(uri)
-                        .body(Body::empty())
-                        .unwrap();
-                    let block_response = client.request(block_req).await.unwrap();
-                    let body_bytes = hyper::body::to_bytes(block_response).await.unwrap();
-                    machine
-                        .write_memory(MACHINE_IO_ADDRESSS + 16, &body_bytes.clone())
-                        .unwrap();
-                    machine
-                        .write_memory(
-                            MACHINE_IO_ADDRESSS,
-                            &body_bytes.len().to_be_bytes().to_vec(),
-                        )
-                        .unwrap();
-                } else {
-                    panic!("unknown namespace");
-                }
-            }
-        }
-        */
         // We should basically not get here in a well-behaved app, it should FINISH (accept/reject), EXCEPTION
         if matches!(
             interpreter_break_reason,
