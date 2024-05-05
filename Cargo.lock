@@ -1526,7 +1526,7 @@ dependencies = [
 [[package]]
 name = "cartesi-machine"
 version = "0.15.2"
-source = "git+https://github.com/stskeeps/dave?rev=cc2c1f3d64b744579c98aeb4c7f6e554bdbe6d77#cc2c1f3d64b744579c98aeb4c7f6e554bdbe6d77"
+source = "git+https://github.com/stskeeps/dave?branch=0.17#c68d2c070b09e02e5717980ae210451b55485976"
 dependencies = [
  "cartesi-machine-sys",
  "hex",
@@ -1538,7 +1538,7 @@ dependencies = [
 [[package]]
 name = "cartesi-machine-sys"
 version = "0.15.2"
-source = "git+https://github.com/stskeeps/dave?rev=cc2c1f3d64b744579c98aeb4c7f6e554bdbe6d77#cc2c1f3d64b744579c98aeb4c7f6e554bdbe6d77"
+source = "git+https://github.com/stskeeps/dave?branch=0.17#c68d2c070b09e02e5717980ae210451b55485976"
 dependencies = [
  "bindgen",
 ]
