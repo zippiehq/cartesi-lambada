@@ -1,9 +1,14 @@
 #!/bin/sh
-curl http://127.0.0.1:5004/get_tx | sh > /tmp/output 
+curl -d '{"status":"accept"}' -H "Content-Type: application/json" -X POST http://127.0.0.1:5004/finish | jq -r .data.payload | sed s/0x//g | xxd -r -p | sh > /tmp/output
+curl http://127.0.0.1:5005/open_state
+
 echo "state of mfs:"
 ipfs files ls /
 echo "done"
 ipfs files ls /state
 echo "done ls state"
 ipfs files write -e /state/output < /tmp/output
-curl -X POST http://127.0.0.1:5004/finish
+curl http://127.0.0.1:5005/commit_state
+# this never gets executed
+
+curl -X POST -d '{"status":"accept"}' -H "Content-Type: application/json" -X POST http://127.0.0.1:5004/finish

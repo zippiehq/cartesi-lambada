@@ -1,3 +1,5 @@
+use alloy_primitives::{address, U256};
+use alloy_sol_types::{sol, SolCall};
 use async_compatibility_layer::logging::{setup_backtrace, setup_logging};
 use async_std::stream::StreamExt;
 use async_std::task;
@@ -15,8 +17,7 @@ use os_pipe::{dup_stdin, dup_stdout};
 use polling::{Event, Events, Poller};
 use rs_car_ipfs::single_file::read_single_file_seek;
 use serde::{Deserialize, Serialize};
-use sha2::Digest;
-use sha2::Sha256;
+use sha3::{Digest, Sha3_256};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Cursor;
@@ -27,41 +28,25 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 use std::{thread, time::SystemTime};
-pub const MACHINE_IO_ADDRESSS: u64 = 0x90000000000000;
 
-// IPFS 'de-hashing' - get a IPFS block based on a CID
-const READ_BLOCK: u64 = 0x00001;
+const HTIF_YIELD_MANUAL_REASON_RX_ACCEPTED_DEF: u16 = 0x1;
+const HTIF_YIELD_MANUAL_REASON_RX_REJECTED_DEF: u16 = 0x2;
 
-// an exception happened in the machine
-const EXCEPTION: u64 = 0x00002;
+const EXCEPTION: u16 = 0x4;
+const CURRENT_STATE_CID: u16 = 0x20;
+const SET_STATE_CID: u16 = 0x21;
+const METADATA: u16 = 0x22;
+const KECCAK256_NAMESPACE: u16 = 0x23;
+const EXTERNALIZE_STATE: u16 = 0x24;
+const IPFS_GET_BLOCK: u16 = 0x25;
+const HINT: u16 = 0x26;
 
-// machine/app is expecting to be given a transaction payload, also current state CID and current app CID
-const LOAD_TX: u64 = 0x00003;
+const PMA_CMIO_RX_BUFFER_START_DEF: u64 = 0x60000000;
+const PMA_CMIO_TX_BUFFER_START_DEF: u64 = 0x60800000;
+const PMA_CMIO_RX_BUFFER_LOG2_SIZE_DEF: u64 = 21;
+const PMA_CMIO_TX_BUFFER_LOG2_SIZE_DEF: u64 = 21;
+const HTIF_YIELD_REASON_ADVANCE_STATE_DEF: u16 = 0;
 
-// app is done processing the transaction succesfully or unsuccesfully but not with an exception
-const FINISH: u64 = 0x00004;
-
-// Write back to IPFS on host (extract new IPFS blocks created inside machine)
-const WRITE_BLOCK: u64 = 0x000005;
-
-// base image has booted up and expects to get the current app CID to initialize it into LOAD_TX state. Null-op in arbitration.
-const LOAD_APP: u64 = 0x00006;
-
-// make a hint that we're expecting certain IPFS hashes to be available (for example all hashes from ethereum block X), null-op in arbitration
-const HINT: u64 = 0x00007;
-
-// get metadata by 32-byte hash
-const GET_METADATA: u64 = 0x00008;
-
-const SPAWN_COMPUTE: u64 = 0x0000A;
-
-const JOIN_COMPUTE: u64 = 0x0000B;
-
-// retrieve from a data source
-
-const GET_DATA: u64 = 0x00009;
-
-const NAMESPACE_KECCAK256: u64 = 0x2;
 fn main() {
     let my_stderr =
         File::create("/tmp/lambada-worker-stderr.log").expect("Failed to create stderr file");
@@ -187,6 +172,31 @@ fn main() {
         }
     }
 }
+
+fn encode_evm_advance(payload: Vec<u8>) -> Vec<u8> {
+    sol! { interface Inputs {
+        function EvmAdvance(
+            uint256 chainId,
+            address appContract,
+            address msgSender,
+            uint256 blockNumber,
+            uint256 blockTimestamp,
+            uint256 index,
+            bytes calldata payload
+        ) external;
+    } };
+    let call = Inputs::EvmAdvanceCall {
+        chainId: U256::from(0),
+        appContract: address!(),
+        msgSender: address!(),
+        blockNumber: U256::from(0),
+        blockTimestamp: U256::from(0),
+        index: U256::from(0),
+        payload: payload.into(),
+    };
+    call.abi_encode()
+}
+
 async fn execute(
     ipfs_url: &str,
     ipfs_write_url: &str,
@@ -217,6 +227,7 @@ async fn execute(
         .unwrap();
 
     let mut app_cid;
+
     let client = hyper::Client::new();
 
     match client.request(req).await {
@@ -252,6 +263,13 @@ async fn execute(
     tracing::info!(
         "app cid {:?}",
         Cid::try_from(app_cid.clone()).unwrap().to_string()
+    );
+
+    // XXX this feels a bit like a layering violation
+    let mut metadata = metadata.clone();
+    metadata.insert(
+        calculate_sha256("lambada-app".as_bytes()),
+        Cid::try_from(app_cid.clone()).unwrap().to_bytes(),
     );
 
     let read_client = IpfsClient::from_str(ipfs_url).unwrap();
@@ -336,6 +354,7 @@ async fn execute(
                 )),
                 RuntimeConfig {
                     skip_root_hash_check: true,
+                    skip_root_hash_store: true,
                     ..Default::default()
                 },
             )
@@ -351,19 +370,20 @@ async fn execute(
         );
 
         machine_loaded_state = 2;
-    } else if std::path::Path::new(&format!("/data/snapshot/{}_bootedup", base_image)).exists() {
+    } else if std::path::Path::new(&format!("/data/snapshot/{}_get_app", base_image)).exists() {
         // There is a snapshot of this base machine initialized and waiting to be populated with an app that'll initialize (LOAD_APP)
-        while std::path::Path::new(&format!("/data/snapshot/{}_bootedup.lock", base_image)).exists()
+        while std::path::Path::new(&format!("/data/snapshot/{}_get_app.lock", base_image)).exists()
         {
-            tracing::info!("waiting for {}_bootedup.lock", base_image);
+            tracing::info!("waiting for {}_get_app.lock", base_image);
             thread::sleep(std::time::Duration::from_millis(500));
         }
         let before_load_machine = SystemTime::now();
         machine = Some(
             Machine::load(
-                std::path::Path::new(&format!("/data/snapshot/{}_bootedup", base_image).as_str()),
+                std::path::Path::new(&format!("/data/snapshot/{}_get_app", base_image).as_str()),
                 RuntimeConfig {
                     skip_root_hash_check: true,
+                    skip_root_hash_store: true,
                     ..Default::default()
                 },
             )
@@ -391,6 +411,7 @@ async fn execute(
                 std::path::Path::new(&format!("/data/snapshot/{}", base_image).as_str()),
                 RuntimeConfig {
                     skip_root_hash_check: true,
+                    skip_root_hash_store: true,
                     ..Default::default()
                 },
             )
@@ -440,6 +461,7 @@ async fn execute(
                     std::path::Path::new(&format!("/data/snapshot/{}", base_image)),
                     RuntimeConfig {
                         skip_root_hash_check: true,
+                        skip_root_hash_store: true,
                         ..Default::default()
                     },
                 )
@@ -491,169 +513,29 @@ async fn execute(
                 );
             }
         }
-        let time_before_read_opt = SystemTime::now();
 
-        // Command/opcode is 64-bit big endian value at MACHINE_IO_ADDRESSS
-        let read_opt_be_bytes = machine.read_memory(MACHINE_IO_ADDRESSS, 8).unwrap();
-        let time_after_read_opt = SystemTime::now();
-        if measure_execution_time {
-            tracing::info!(
-                "read_memory(MACHINE_IO_ADDRESSS, 8)(reading opt) took {} milliseconds",
-                time_after_read_opt
-                    .duration_since(time_before_read_opt)
-                    .unwrap()
-                    .as_millis()
-            );
-        }
+        const M16: u64 = ((1 << 16) - 1);
+        const M32: u64 = ((1 << 32) - 1);
+        let cmd = machine.read_htif_tohost_cmd().unwrap();
+        let data = machine.read_htif_tohost_data().unwrap();
+        let reason = ((data >> 32) & M16) as u16;
+        let length = data & M32; // length
 
-        let opt = u64::from_be_bytes(read_opt_be_bytes.try_into().unwrap());
+        tracing::info!("got reason {} cmd {} data {}", reason, cmd, length);
 
-        match opt {
-            // Handles the READ_BLOCK action: [IPFS "dehashing"]
-            // 1. Reads a 64-bit value from the specified memory address (MACHINE_IO_ADDRESSS + 8) and converts it from big-endian to a u64, representing the length of a content identifier (cid).
-            // 2. Reads the content identifier (cid) of the specified length from memory starting at MACHINE_IO_ADDRESSS + 16 and converts it into a Cid object.
-            // 3. Fetches the block associated with the cid from IPFS, concatenating all chunks of data received into a single vector.
-            // 4. Writes the retrieved block back into the machine's memory at MACHINE_IO_ADDRESSS + 16, encoding using the STANDARD base64 (due to jsonrpc).
-            // 5. Writes the length of the block as a big-endian byte array into the machine's memory at MACHINE_IO_ADDRESSS, also using the STANDARD encoding.
-            //
-            // Unavailable IPFS CID should kill the machine, data requested by machine is assumed to be available.
-            READ_BLOCK => {
-                tracing::info!("READ_BLOCK");
-                let time_before_read_cid_length = SystemTime::now();
-
-                let length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-                let time_after_read_cid_length = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 8, 8) (cid length) took {} milliseconds",
-                        time_after_read_cid_length
-                            .duration_since(time_before_read_cid_length)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-
-                let time_before_read_cid = SystemTime::now();
-
-                let cid = Cid::try_from(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 16, length)
-                        .unwrap(),
-                )
-                .unwrap();
-                let time_after_read_cid = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 16, length) (length) took {} milliseconds",
-                        time_after_read_cid
-                            .duration_since(time_before_read_cid)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-
-                tracing::info!("read cid {:?}", cid.to_string());
-                let time_before_get_block = SystemTime::now();
-                let block = read_client
-                    .block_get(cid.to_string().as_str())
-                    .map_ok(|chunk| chunk.to_vec())
-                    .try_concat()
-                    .await
+        match reason {
+            SET_STATE_CID => {
+                let cid_raw = machine
+                    .read_memory(PMA_CMIO_TX_BUFFER_START_DEF, length)
                     .unwrap();
-                let time_after_get_block = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "block_get({}) took {} milliseconds",
-                        cid.to_string(),
-                        time_after_get_block
-                            .duration_since(time_before_get_block)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-
-                tracing::info!("block len {:?}", block.len());
-
-                let time_before_standard_encode = SystemTime::now();
-
-                let time_after_standard_encode = SystemTime::now();
-
-                if measure_execution_time {
-                    tracing::info!(
-                        "write_memory standard encode took {} milliseconds",
-                        time_after_standard_encode
-                            .duration_since(time_before_standard_encode)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-                let time_before_write_block = SystemTime::now();
-
-                machine
-                    .write_memory(MACHINE_IO_ADDRESSS + 16, &block.clone())
-                    .unwrap();
-                let time_after_write_block = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "write_memory(MACHINE_IO_ADDRESSS + 16, STANDARD.encode(block.clone())) (writing encoded block) took {} milliseconds",
-                        time_after_write_block
-                        .duration_since(time_before_write_block)
-                        .unwrap()
-                        .as_millis()
-                    );
-                }
-
-                let time_before_write_block_len = SystemTime::now();
-
-                machine
-                    .write_memory(MACHINE_IO_ADDRESSS, &block.len().to_be_bytes().to_vec())
-                    .unwrap();
-                let time_after_write_block_len = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(block.len().to_be_bytes().to_vec())) (writing block length) took {} milliseconds",
-                        time_after_write_block_len
-                        .duration_since(time_before_write_block_len)
-                        .unwrap()
-                        .as_millis()
-                    );
-                }
-
-                tracing::info!("read_block info was written");
-            }
-            // Handles the EXCEPTION case coming from VM/guest:
-            // 1. Destroys the current state of the machine, releasing any resources it was using.
-            // 2. Shuts down the machine, ensuring all ongoing processes are terminated.
-            // 3. Returns an error of type `std::io::Error` with the kind `std::io::ErrorKind::Other`, indicating a general error, and a message "exception" to signify that an exception occurred.
-            EXCEPTION => {
-                tracing::info!("HTIF_YIELD_REASON_TX_EXCEPTION");
+                let cid = Cid::try_from(cid_raw).unwrap();
+                tracing::info!("SET_STATE_CID, ending succesfully");
                 drop(machine);
-                return Err(serde_error::Error::new(&std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "exception",
-                )));
+                tracing::info!("SET_STATE_CID received cid {}", cid);
+                return Ok(cid.to_bytes());
             }
-            // Handles the LOAD_TX action coming from VM/guest:
-            // 1. Checks if the `machine_loaded_state` is either 0 or 1 [TODO: explain this better]:. If true, performs the following:
-            //    a. Converts `app_cid` to a `Cid' so we can get it in text form.
-            //    b. Stores a snapshot of the current state to a directory named after `app_cid` under `/data/snapshot/`, prefixed with base_.
-            // 2. Converts `state_cid` to a `Cid` type and calculates its byte length as `cid_length`.
-            // 3. Writes `cid_length` as big-endian bytes into the machine's memory at `MACHINE_IO_ADDRESSS`.
-            // 4. Writes the bytes of `current_cid` to the machine's memory at `MACHINE_IO_ADDRESSS + 8`.
-            // 5. Calculates the length of `payload` as `payload_length` and writes it as big-endian bytes into the machine's memory at `MACHINE_IO_ADDRESSS + 16 + cid_length`.
-            // 6. Writes the `payload` bytes to the machine's memory at `MACHINE_IO_ADDRESSS + 24 + cid_length`.
-            // 7. Converts the block number from `block_info` to big-endian bytes and writes it to the machine's memory at `MACHINE_IO_ADDRESSS + 24 + cid_length + payload_length`.
-            // 8. Initializes a `block_timestamp` vector of 32 bytes and fills it with the big-endian representation of the timestamp from `block_info`.
-            // 9. Writes the `block_timestamp` bytes to the machine's memory at `MACHINE_IO_ADDRESSS + 32 + cid_length + payload_length`.
-            // 10. Extracts the `hash` from `block_info` and writes it to the machine's memory at `MACHINE_IO_ADDRESSS + 32 + block_timestamp.len() + cid_length + payload_length`.
-            LOAD_TX => {
-                tracing::info!("LOAD_TX");
+            HTIF_YIELD_MANUAL_REASON_RX_ACCEPTED_DEF => {
+                tracing::info!("HTIF_YIELD_MANUAL_REASON_RX_ACCEPTED_DEF");
                 if !std::path::Path::new(&format!(
                     "/data/snapshot/{}_{}.lock",
                     base_image.as_str(),
@@ -709,227 +591,33 @@ async fn execute(
                 } else {
                     tracing::info!("snapshot of app already being stored or stored, skipping snapshot (lock file exists)")
                 }
-                if payload.is_none() {
-                    drop(machine);
-                    return Ok(Vec::new());
-                }
-                let cid_length = state_cid.clone().to_bytes().len() as u64;
-                let time_before_write_cid_length = SystemTime::now();
 
+                let payload = payload.clone().unwrap_or_default();
+                let encoded = encode_evm_advance(payload);
+                tracing::info!("evm encoded {}", hex::encode(encoded.clone()));
                 machine
-                    .write_memory(MACHINE_IO_ADDRESSS, &cid_length.to_be_bytes().to_vec())
+                    .send_cmio_response(HTIF_YIELD_REASON_ADVANCE_STATE_DEF, &encoded)
                     .unwrap();
-                let time_after_write_cid_length = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(cid_length.to_be_bytes().to_vec())) (writing encoded cid length) took {} milliseconds",
-                        time_after_write_cid_length
-                        .duration_since(time_before_write_cid_length)
-                        .unwrap()
-                        .as_millis()
-                    );
-                }
-
-                let time_before_write_state_cid = SystemTime::now();
-
-                machine
-                    .write_memory(MACHINE_IO_ADDRESSS + 8, &state_cid.clone().to_bytes())
-                    .unwrap();
-                let time_after_write_state_cid = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "write_memory(MACHINE_IO_ADDRESSS + 8, STANDARD.encode(state_cid.clone().to_bytes()),)(writing encoded cid) took {} milliseconds",
-                        time_after_write_state_cid
-                        .duration_since(time_before_write_state_cid)
-                        .unwrap()
-                        .as_millis()
-                    );
-                }
-
-                let payload_length = payload.clone().unwrap().len() as u64;
-
-                let time_before_write_payload_length = SystemTime::now();
-
-                machine
-                    .write_memory(
-                        MACHINE_IO_ADDRESSS + 16 + cid_length,
-                        &payload_length.to_be_bytes().to_vec(),
-                    )
-                    .unwrap();
-                let time_after_write_payload_length = SystemTime::now();
-
-                if measure_execution_time {
-                    tracing::info!(
-                        "write_memory(MACHINE_IO_ADDRESSS + 16 + cid_length, STANDARD.encode(payload_length.to_be_bytes().to_vec()))(writing payload length) took {} milliseconds",
-                        time_after_write_payload_length
-                        .duration_since(time_before_write_payload_length)
-                        .unwrap()
-                        .as_millis()
-                    );
-                }
-
-                let time_before_write_payload = SystemTime::now();
-
-                machine
-                    .write_memory(
-                        MACHINE_IO_ADDRESSS + 24 + cid_length,
-                        &payload.clone().unwrap(),
-                    )
-                    .unwrap();
-
-                let time_after_write_payload = SystemTime::now();
-
-                if measure_execution_time {
-                    tracing::info!(
-                            "write_memory(MACHINE_IO_ADDRESSS + 24 + cid_length, STANDARD.encode(payload.clone().unwrap()))(writing payload) took {} milliseconds",
-                            time_after_write_payload
-                        .duration_since(time_before_write_payload)
-                        .unwrap()
-                        .as_millis()
-                        );
-                }
-
-                tracing::info!("load_tx info was written");
+                tracing::info!("evm advance was written");
             }
-            // FINISH: The guest has finished execution and reported back a status code, accept or rejection of the transaction.
-            // It also reports back the current IPFS CID of the state which we return to the consumer of this function.
-            FINISH => {
-                tracing::info!("FINISH");
-                let time_before_read_status = SystemTime::now();
-
-                let status = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-                let time_after_read_status = SystemTime::now();
-
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading status) took {} milliseconds",
-                        time_after_read_status
-                        .duration_since(time_before_read_status)
-                        .unwrap()
-                        .as_millis()
-                    );
-                }
-
-                let time_before_read_data_length = SystemTime::now();
-
-                let length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 16, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-                let time_after_read_data_length = SystemTime::now();
-
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading status) took {} milliseconds",
-                        time_after_read_data_length
-                        .duration_since(time_before_read_data_length)
-                        .unwrap()
-                        .as_millis()
-                    );
-                }
-
-                let time_before_read_data = SystemTime::now();
-
-                let data = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 24, length)
+            CURRENT_STATE_CID => {
+                tracing::info!("CURRENT_STATE_CID");
+                machine
+                    .send_cmio_response(0, &state_cid.to_bytes().clone())
                     .unwrap();
-                let time_after_read_data = SystemTime::now();
-
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 24, length)(reading data) took {} milliseconds",
-                        time_after_read_data
-                        .duration_since(time_before_read_data)
-                        .unwrap()
-                        .as_millis()
-                    );
-                }
-
-                match status {
-                    0 => {
-                        tracing::info!("HTIF_YIELD_REASON_RX_ACCEPTED");
-                        drop(machine);
-                        tracing::info!(
-                            "FINISH received cid {}",
-                            Cid::try_from(data.clone()).unwrap()
-                        );
-                        return Ok(data);
-                    }
-                    1 => {
-                        tracing::info!("HTIF_YIELD_REASON_RX_REJECTED");
-                        drop(machine);
-                        return Err(serde_error::Error::new(&std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            "transaction was rejected",
-                        )));
-                    }
-                    _ => {
-                        drop(machine);
-                        return Err(serde_error::Error::new(&std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            "unknown status",
-                        )));
-                    }
-                }
+                tracing::info!("current state info was written");
             }
-            // WRITE_BLOCK:
-            // 1. Reads an 8-byte value from the machine's memory at a specified address offset (MACHINE_IO_ADDRESSS + 8).
-            // 2. Converts this 8-byte value from big-endian format to a u64 representing the length of the data to be written.
-            // 3. Reads a block of memory from the machine, starting at a specified address offset (MACHINE_IO_ADDRESSS + 16) and of the previously determined length.
-            // 4. Creates a Cursor wrapped around the cloned memory block. This Cursor is used to facilitate reading the data as a stream.
-            // 5. Invokes the 'block_put' method of a IPFS client with the Cursor as an argument, which stores the block using the data stream.
-            WRITE_BLOCK => {
-                tracing::info!("WRITE_BLOCK");
-                let time_before_read_data_length = SystemTime::now();
-
-                let length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-                let time_after_read_data_length = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading data length) took {} milliseconds",
-                        time_after_read_data_length
-                            .duration_since(time_before_read_data_length)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-
-                let time_before_read_data = SystemTime::now();
+            EXTERNALIZE_STATE => {
+                tracing::info!("EXTERNALIZE_STATE");
 
                 let memory = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 16, length)
+                    .read_memory(PMA_CMIO_TX_BUFFER_START_DEF, length)
                     .unwrap();
 
-                let time_after_read_data = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                            "read_memory(MACHINE_IO_ADDRESSS + 16, length)(reading data ) took {} milliseconds",
-                            time_after_read_data
-                                .duration_since(time_before_read_data)
-                                .unwrap()
-                                .as_millis()
-                        );
-                }
-
+                // XXX background this in future
                 let data = Cursor::new(memory.clone());
                 let time_before_putting_block = SystemTime::now();
-
-                let put_response = write_client.block_put(data).await.unwrap();
+                let _ = write_client.block_put(data).await.unwrap();
                 let time_after_putting_block = SystemTime::now();
                 if measure_execution_time {
                     tracing::info!(
@@ -940,185 +628,53 @@ async fn execute(
                             .as_millis()
                     );
                 }
+                machine.send_cmio_response(0, &[]).unwrap();
             }
-            // op LOAD_APP is a signal from the base image that it's ready to be told which app CID to attempt to initialize
-            // This results in length of app CID (BE u64) and the CID itself being written into the flash drive
-            // If a snapshot doesn't exist for the base image being in LOAD_APP mode, it's done
-            LOAD_APP => {
-                tracing::info!("LOAD_APP");
+            IPFS_GET_BLOCK => {
+                tracing::info!("IPFS_GET_BLOCK");
 
-                if !std::path::Path::new(&format!("/data/snapshot/{}_bootedup", base_image))
-                    .exists()
-                    && !std::path::Path::new(&format!(
-                        "/data/snapshot/{}_bootedup.lock",
-                        base_image
-                    ))
-                    .exists()
-                    && machine_loaded_state == 0
-                {
-                    if std::fs::OpenOptions::new()
-                        .read(true)
-                        .write(true)
-                        .create_new(true)
-                        .open(format!("/data/snapshot/{}_bootedup.lock", base_image))
-                        .is_ok()
-                    {
-                        match unsafe { fork() } {
-                            Ok(ForkResult::Parent { child, .. }) => {}
-                            Ok(ForkResult::Child) => {
-                                let _ = setsid().unwrap();
-                                machine
-                                    .store(Path::new(&format!(
-                                        "/data/snapshot/{}_bootedup",
-                                        base_image
-                                    )))
-                                    .unwrap();
-                                std::fs::remove_file(format!(
-                                    "/data/snapshot/{}_bootedup.lock",
-                                    base_image
-                                ))
-                                .unwrap();
-                                tracing::info!("done snapshotting {}_bootedup", base_image);
-                                std::process::exit(0);
-                            }
-                            Err(_) => {}
-                        }
-                    }
-                } else {
-                    tracing::info!("snapshot of base already exists or lock file exists, skipping");
-                }
-                let app_cid: cid::CidGeneric<64> = Cid::try_from(app_cid.clone()).unwrap();
-
-                tracing::info!("app cid {:?}", Cid::try_from(app_cid.clone()).unwrap());
-                let cid_length = app_cid.clone().to_bytes().len() as u64;
-                let time_before_writing_cid_length = SystemTime::now();
-
-                machine
-                    .write_memory(MACHINE_IO_ADDRESSS, &cid_length.to_be_bytes().to_vec())
+                let memory = machine
+                    .read_memory(PMA_CMIO_TX_BUFFER_START_DEF, length)
                     .unwrap();
-                let time_after_writing_cid_length = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(cid_length.to_be_bytes().to_vec()))(writing cid length) took {} milliseconds",
-                        time_after_writing_cid_length
-                            .duration_since(time_before_writing_cid_length)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
+                let cid = Cid::try_from(memory).unwrap();
 
-                let time_before_writing_app_cid = SystemTime::now();
-                machine
-                    .write_memory(MACHINE_IO_ADDRESSS + 8, &app_cid.clone().to_bytes())
+                tracing::info!("read cid {:?}", cid.to_string());
+                let time_before_get_block = SystemTime::now();
+                let block = read_client
+                    .block_get(cid.to_string().as_str())
+                    .map_ok(|chunk| chunk.to_vec())
+                    .try_concat()
+                    .await
                     .unwrap();
-                let time_after_writing_app_cid = SystemTime::now();
+                let time_after_get_block = SystemTime::now();
                 if measure_execution_time {
                     tracing::info!(
-                        "write_memory(MACHINE_IO_ADDRESSS + 8, STANDARD.encode(app_cid.clone().to_bytes()),)(writing cid length) took {} milliseconds",
-                        time_after_writing_app_cid
-                            .duration_since(time_before_writing_app_cid)
+                        "block_get({}) took {} milliseconds",
+                        cid.to_string(),
+                        time_after_get_block
+                            .duration_since(time_before_get_block)
                             .unwrap()
                             .as_millis()
                     );
                 }
-
-                tracing::info!("load app info was written");
+                machine.send_cmio_response(0, &block.clone()).unwrap();
+                tracing::info!("ipfs_get_block info was written");
             }
-
-            // This is currently a null-op, but HINT is meant to tell the host / dehashing database/provider that there's an expectation
-            // that certain hashes/CIDs are available for dehashing/resolving
-            // In memory this is a BE u64 value of length of payload
-            HINT => {
-                tracing::info!("HINT");
-                let time_before_reading_payload_length = SystemTime::now();
-
-                let payload_length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-                let time_after_reading_payload_length = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading payload length) took {} milliseconds",
-                        time_after_reading_payload_length
-                            .duration_since(time_before_reading_payload_length)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-
-                let time_before_reading_payload = SystemTime::now();
-
-                let payload = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 16, payload_length)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-
-                let time_after_reading_payload = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 16, payload_length)(reading payload) took {} milliseconds",
-                        time_after_reading_payload
-                            .duration_since(time_before_reading_payload)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-
-                tracing::info!("hint payload {:?}", payload);
+            EXCEPTION => {
+                tracing::info!("EXCEPTION");
+                drop(machine);
+                return Err(serde_error::Error::new(&std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "exception",
+                )));
             }
-            // Handles the GET_METADATA action:
-            // 1. Reads a 64-bit value from the specified memory address (MACHINE_IO_ADDRESSS + 8) and converts it from big-endian to a u64, representing the length of a metadata key
-            // 2. Reads the metadata key of the specified length from memory starting at MACHINE_IO_ADDRESSS + 16
-            // 3. Fetches the metadata associated with the key
-            // 4. Writes the retrieved metadata back into the machine's memory at MACHINE_IO_ADDRESSS + 16, encoding using the STANDARD base64 (due to jsonrpc).
-            // 5. Writes the length of the metadata as a big-endian byte array into the machine's memory at MACHINE_IO_ADDRESSS, also using the STANDARD encoding.
-            //
-            // Unavailable metadata should kill the machine, data requested by machine is assumed to be available.
-            GET_METADATA => {
-                tracing::info!("GET_METADATA");
+            METADATA => {
+                tracing::info!("METADATA");
                 let time_before_reading_metadata_key_length = SystemTime::now();
 
-                let length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-                let time_after_reading_metadata_key_length = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 8, 8)(reading metadata key length) took {} milliseconds",
-                        time_after_reading_metadata_key_length
-                            .duration_since(time_before_reading_metadata_key_length)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-
-                let time_before_reading_metadata_key = SystemTime::now();
-
                 let metadata_key = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 16, length)
+                    .read_memory(PMA_CMIO_TX_BUFFER_START_DEF, length)
                     .unwrap();
-
-                let time_after_reading_metadata_key = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "read_memory(MACHINE_IO_ADDRESSS + 16, length)(reading metadata key) took {} milliseconds",
-                        time_after_reading_metadata_key
-                            .duration_since(time_before_reading_metadata_key)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
 
                 tracing::info!("read metadata: {:?}", hex::encode(metadata_key.clone()));
 
@@ -1126,261 +682,91 @@ async fn execute(
                 tracing::info!("metadata len {:?}", metadata_result.len());
                 let time_before_writing_metadata = SystemTime::now();
                 machine
-                    .write_memory(MACHINE_IO_ADDRESSS + 16, &(metadata_result.clone()))
+                    .send_cmio_response(0, &metadata_result.clone())
                     .unwrap();
-                let time_after_writing_metadata = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "write_memory(MACHINE_IO_ADDRESSS + 16, STANDARD.encode(metadata_result.clone()))(writing encoded metadata) took {} milliseconds",
-                        time_after_writing_metadata
-                            .duration_since(time_before_writing_metadata)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-
-                let time_before_writing_metadata_length = SystemTime::now();
-                machine
-                    .write_memory(
-                        MACHINE_IO_ADDRESSS,
-                        &(metadata_result.len().to_be_bytes().to_vec()),
-                    )
-                    .unwrap();
-                let time_after_writing_metadata_length = SystemTime::now();
-                if measure_execution_time {
-                    tracing::info!(
-                        "write_memory(MACHINE_IO_ADDRESSS, STANDARD.encode(metadata_result.len().to_be_bytes().to_vec()))(writing encoded metadata length) took {} milliseconds",
-                        time_after_writing_metadata_length
-                            .duration_since(time_before_writing_metadata_length)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
                 tracing::info!("metadata info was written");
             }
-            /*SPAWN_COMPUTE => {
-                let length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-
-                let cid_bytes = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 16, length)
+            HINT => {
+                let hint = machine
+                    .read_memory(PMA_CMIO_TX_BUFFER_START_DEF, length)
                     .unwrap();
-                let cid = Cid::try_from(cid_bytes.clone()).unwrap();
 
-                let payload_length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 16 + length, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-
-                let payload = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 24 + length, payload_length)
-                    .unwrap();
-                let ipfs_url = Arc::new(Mutex::new(ipfs_url.to_string()));
-                let ipfs_write_url = Arc::new(Mutex::new(ipfs_write_url.to_string()));
-                let machine_url = Arc::new(Mutex::new(machine_url.clone()));
-
-                let mut hasher = Sha256::new();
-                hasher.update(cid_bytes);
-                hasher.update(payload.clone());
-                let thread_hash = hasher.finalize().to_vec();
-
-                thread_execute.insert(
-                    thread_hash,
-                    thread::spawn(move || {
-                        let ipfs_url = Arc::clone(&ipfs_url);
-                        let ipfs_write_url = Arc::clone(&ipfs_write_url);
-                        let machine_url = Arc::clone(&machine_url);
-
-                        task::block_on(async {
-                            let mut metadata: HashMap<Vec<u8>, Vec<u8>> =
-                                HashMap::<Vec<u8>, Vec<u8>>::new();
-
-                            metadata.insert(
-                                calculate_sha256("sequencer".as_bytes()),
-                                calculate_sha256("spawn".as_bytes()),
-                            );
-                            execute(
-                                machine_url.lock().await.clone(),
-                                ipfs_url.lock().await.clone().as_str(),
-                                ipfs_write_url.lock().await.clone().as_str(),
-                                Some(payload),
-                                cid,
-                                metadata,
-                                max_cycles_input,
-                            )
-                            .await
-                        })
-                    }),
-                );
-            }
-            JOIN_COMPUTE => {
-                let length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-
-                let cid_bytes = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 16, length)
-                    .unwrap();
-                let cid = Cid::try_from(cid_bytes.clone()).unwrap();
-
-                let payload_length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 16 + length, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-
-                let payload = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 24 + length, payload_length)
-                    .unwrap();
-                let ipfs_url = Arc::new(Mutex::new(ipfs_url.to_string()));
-                let ipfs_write_url = Arc::new(Mutex::new(ipfs_write_url.to_string()));
-                let machine_url = Arc::new(Mutex::new(machine_url.clone()));
-
-                let mut hasher = Sha256::new();
-                hasher.update(cid_bytes);
-                hasher.update(payload.clone());
-                let thread_hash = hasher.finalize().to_vec();
-
-                let mut execute_result = None;
-                if let Some(thread) = thread_execute.remove(&thread_hash) {
-                    execute_result = Some(thread.join().unwrap());
-                } else {
-                    execute_result = Some(
-                        thread::spawn(move || {
-                            let ipfs_url = Arc::clone(&ipfs_url);
-                            let ipfs_write_url = Arc::clone(&ipfs_write_url);
-                            let machine_url = Arc::clone(&machine_url);
-
-                            task::block_on(async {
-                                let mut metadata: HashMap<Vec<u8>, Vec<u8>> =
-                                    HashMap::<Vec<u8>, Vec<u8>>::new();
-
-                                metadata.insert(
-                                    calculate_sha256("sequencer".as_bytes()),
-                                    calculate_sha256("spawn".as_bytes()),
-                                );
-                                execute(
-                                    machine_url.lock().await.clone(),
-                                    ipfs_url.lock().await.clone().as_str(),
-                                    ipfs_write_url.lock().await.clone().as_str(),
-                                    Some(payload),
-                                    cid,
-                                    metadata,
-                                    max_cycles_input,
-                                )
-                                .await
-                            })
-                        })
-                        .join()
-                        .unwrap(),
-                    )
-                }
-
-                match execute_result.unwrap() {
-                    Ok(cid) => {
-                        machine
-                            .write_memory(
-                                MACHINE_IO_ADDRESSS + 8,
-                                STANDARD.encode(0_u64.to_be_bytes()),
-                            )
-                            .await
-                            .unwrap();
-
-                        machine
-                            .write_memory(
-                                MACHINE_IO_ADDRESSS + 16,
-                                STANDARD.encode(cid.len().to_be_bytes()),
-                            )
-                            .await
-                            .unwrap();
-
-                        machine
-                            .write_memory(MACHINE_IO_ADDRESSS + 24, STANDARD.encode(cid))
-                            .await
-                            .unwrap();
+                let hint_str = String::from_utf8(hint).unwrap();
+                if hint_str == "get_app" {
+                    if !std::path::Path::new(&format!("/data/snapshot/{}_get_app", base_image))
+                        .exists()
+                        && !std::path::Path::new(&format!(
+                            "/data/snapshot/{}_get_app.lock",
+                            base_image
+                        ))
+                        .exists()
+                        && machine_loaded_state == 0
+                    {
+                        if std::fs::OpenOptions::new()
+                            .read(true)
+                            .write(true)
+                            .create_new(true)
+                            .open(format!("/data/snapshot/{}_get_app.lock", base_image))
+                            .is_ok()
+                        {
+                            match unsafe { fork() } {
+                                Ok(ForkResult::Parent { child, .. }) => {}
+                                Ok(ForkResult::Child) => {
+                                    let _ = setsid().unwrap();
+                                    machine
+                                        .store(Path::new(&format!(
+                                            "/data/snapshot/{}_get_app",
+                                            base_image
+                                        )))
+                                        .unwrap();
+                                    std::fs::remove_file(format!(
+                                        "/data/snapshot/{}_get_app.lock",
+                                        base_image
+                                    ))
+                                    .unwrap();
+                                    tracing::info!("done snapshotting {}_get_app", base_image);
+                                    std::process::exit(0);
+                                }
+                                Err(_) => {}
+                            }
+                        }
+                    } else {
+                        tracing::info!(
+                            "snapshot of base already exists or lock file exists, skipping"
+                        );
                     }
-                    Err(_) => {
-                        machine
-                            .write_memory(
-                                MACHINE_IO_ADDRESSS + 8,
-                                STANDARD.encode(1_u64.to_be_bytes()),
-                            )
-                            .await
-                            .unwrap();
-                    }
+                    machine.send_cmio_response(0, &[]).unwrap();
                 }
             }
-            */
-            GET_DATA => {
-                tracing::info!("GET_DATA");
-                let namespace = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 8, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
-                let id_length = u64::from_be_bytes(
-                    machine
-                        .read_memory(MACHINE_IO_ADDRESSS + 16, 8)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                );
+            KECCAK256_NAMESPACE => {
                 let id = machine
-                    .read_memory(MACHINE_IO_ADDRESSS + 24, id_length)
+                    .read_memory(PMA_CMIO_TX_BUFFER_START_DEF, length)
                     .unwrap();
+                // XXX this id is a string, it should really be bytes
+                let https = HttpsConnector::new();
+                let client = Client::builder().build::<_, hyper::Body>(https);
 
-                if namespace == NAMESPACE_KECCAK256 {
-                    let https = HttpsConnector::new();
-                    let client = Client::builder().build::<_, hyper::Body>(https);
+                // XXX this is bad
+                let uri: String = format!(
+                    "{}/dehash/{}",
+                    std::env::var("KECCAK256_SOURCE").unwrap(),
+                    std::str::from_utf8(id.as_slice()).unwrap()
+                )
+                .parse()
+                .unwrap();
 
-                    // XXX this is bad
-                    let uri: String = format!(
-                        "{}/dehash/{}",
-                        std::env::var("KECCAK256_SOURCE").unwrap(),
-                        std::str::from_utf8(id.as_slice()).unwrap()
-                    )
-                    .parse()
+                let block_req = Request::builder()
+                    .method("GET")
+                    .uri(uri)
+                    .body(Body::empty())
                     .unwrap();
-
-                    let block_req = Request::builder()
-                        .method("GET")
-                        .uri(uri)
-                        .body(Body::empty())
-                        .unwrap();
-                    let block_response = client.request(block_req).await.unwrap();
-                    let body_bytes = hyper::body::to_bytes(block_response).await.unwrap();
-                    machine
-                        .write_memory(MACHINE_IO_ADDRESSS + 16, &body_bytes.clone())
-                        .unwrap();
-                    machine
-                        .write_memory(
-                            MACHINE_IO_ADDRESSS,
-                            &body_bytes.len().to_be_bytes().to_vec(),
-                        )
-                        .unwrap();
-                } else {
-                    panic!("unknown namespace");
-                }
+                let block_response = client.request(block_req).await.unwrap();
+                let body_bytes = hyper::body::to_bytes(block_response).await.unwrap();
+                machine.send_cmio_response(0, &body_bytes).unwrap();
             }
             _ => {
                 // XXX this should be a fatal error
-                tracing::info!("unknown opt {:?}", opt)
+                tracing::info!("unknown reason {:?}", reason)
             }
         }
         // We should basically not get here in a well-behaved app, it should FINISH (accept/reject), EXCEPTION
@@ -1517,7 +903,7 @@ async fn dedup_download_directory(ipfs_url: &str, directory_cid: Cid, out_file_p
 }
 
 pub fn calculate_sha256(input: &[u8]) -> Vec<u8> {
-    let mut hasher = Sha256::new();
+    let mut hasher = Sha3_256::new();
     hasher.update(input);
     hasher.finalize().to_vec()
 }

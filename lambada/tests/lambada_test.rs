@@ -3,9 +3,9 @@ mod lambada_functions_test {
     use hyper::{Body, Request};
     use sequential_test::sequential;
     use std::thread;
-    const APPCHAIN: &str = "bafybeicxrqr6bd4fxsb2hocjwribo5odftt2m3udfcw3zhnrugx57ey4jq";
+    const APPCHAIN: &str = "bafybeicdhhtwmgpnt7jugvlv3xtp2u4w4mkunpmg6txkkkjhpvnt2buyqa";
     const COMPUTE_CID_EXPECTED: &str =
-        "bafybeiemgvnvseqtfnwif6cfjdzgxxfip3zz7ishnz3d6gf5zxdeydquz4";
+        "bafybeiayjruyctdk6thwhy67ke7hjgjtwsnaoas3ekj2gapqlwt63khxle";
     const SUBMIT_HASH_EXPECTED: &str = "COMMIT~j6I86toni18rfwhO1i8_Q0TGyMDyvyKI2Xktt_N0i77Z";
 
     fn subscribe_request_test(server_address: String) {

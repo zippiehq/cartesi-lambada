@@ -1,7 +1,6 @@
 use ark_serialize::CanonicalSerialize;
 use ethers::prelude::*;
-use sha2::Digest;
-use sha2::Sha256;
+use sha3::{Digest, Sha3_256};
 use surf_disco::Url;
 use tide_disco::error::ServerError;
 type HotShotClient = surf_disco::Client<ServerError>;
@@ -872,7 +871,7 @@ async fn subscribe_evm_blocks(
 }
 
 pub fn calculate_sha256(input: &[u8]) -> Vec<u8> {
-    let mut hasher = Sha256::new();
+    let mut hasher = Sha3_256::new();
     hasher.update(input);
     hasher.finalize().to_vec()
 }

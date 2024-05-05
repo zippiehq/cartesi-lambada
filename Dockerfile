@@ -1,13 +1,13 @@
-FROM --platform=linux/amd64 zippiehq/test-image:0.16 AS lambada-image
+FROM --platform=linux/amd64 ghcr.io/zippiehq/cartesi-lambada-base-machine:1.4.1 AS lambada-image
 
 FROM debian:bookworm-20230725-slim AS build
 RUN apt-get update && DEBIAN_FRONTEND="noninteractive" apt-get install -y curl build-essential libssl-dev pkg-config protobuf-compiler cpp-riscv64-linux-gnu gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu bison flex bc libclang-dev
 ARG ARCH=amd64
-RUN curl -LO https://github.com/cartesi/machine-emulator/releases/download/v0.16.0/cartesi-machine-v0.16.0_$ARCH.deb
+RUN curl -LO https://github.com/cartesi/machine-emulator/releases/download/v0.17.0/cartesi-machine-v0.17.0_$ARCH.deb
 RUN apt-get update && DEBIAN_FRONTEND="noninteractive" apt-get install -y \
-    ./cartesi-machine-v0.16.0_$ARCH.deb \
+    ./cartesi-machine-v0.17.0_$ARCH.deb \
     && rm -rf /var/lib/apt/lists/* \
-    && rm cartesi-machine-v0.16.0_$ARCH.deb
+    && rm cartesi-machine-v0.17.0_$ARCH.deb
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |  sh -s -- --default-toolchain stable -y
 
 WORKDIR /build
@@ -33,11 +33,11 @@ RUN apt-get update && DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-i
 RUN mkdir -p /run/sshd
 ARG ARCH=amd64
 ARG RELEASE_DIR=release
-RUN curl -LO https://github.com/cartesi/machine-emulator/releases/download/v0.16.0/cartesi-machine-v0.16.0_$ARCH.deb
+RUN curl -LO https://github.com/cartesi/machine-emulator/releases/download/v0.17.0/cartesi-machine-v0.17.0_$ARCH.deb
 RUN apt-get update && DEBIAN_FRONTEND="noninteractive" apt-get install -y \
-    ./cartesi-machine-v0.16.0_$ARCH.deb \
+    ./cartesi-machine-v0.17.0_$ARCH.deb \
     && rm -rf /var/lib/apt/lists/* \
-    && rm cartesi-machine-v0.16.0_$ARCH.deb
+    && rm cartesi-machine-v0.17.0_$ARCH.deb
 
 RUN curl -LO https://github.com/ipfs/kubo/releases/download/v0.24.0/kubo_v0.24.0_linux-$ARCH.tar.gz
 RUN tar -xvzf kubo_v0.24.0_linux-$ARCH.tar.gz
