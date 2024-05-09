@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 cid = "0.11.0"
-cartesi-machine = { git = "https://github.com/stskeeps/dave", branch = "0.17" }
+cartesi-machine = { git = "https://github.com/cartesi/dave", rev = "d3059a0d70535fb6a9757ee8c8f6170adcddee4e" }
 serde_json = "1.0.100"
 alloy-sol-types = "0.7.2"
 alloy-primitives = "0.7.2"
