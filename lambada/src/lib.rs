@@ -24,4 +24,7 @@ pub struct Options {
 
     #[clap(long, env = "EVM_DA_URL")]
     pub evm_da_url: String,
+
+    #[clap(long, env = "AUTOMATIC_SUBSCRIBE", default_value = "")]
+    pub automatic_subscribe: String,
 }

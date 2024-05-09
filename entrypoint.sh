@@ -22,19 +22,10 @@ if [ x$IPFS_URL = x ]; then
   echo "IPFS up"
   IPFS_URL=http://127.0.0.1:5001
 
-  if [ -e /data/preload ]; then
-     (
-        # "live reload"
-        while true; do
-          touch /preload-before
-          IPFS_PATH=/data/ipfs ipfs add --cid-version=1 -Q -r /data/preload > /preload-after
-          diff -u /preload-before /preload-after
-          cp /preload-after /preload-before
-          sleep 5
-        done
-     ) &
-  fi
   IPFS_PATH=/data/ipfs ipfs add --cid-version=1 -r /sample
+  for x in /data/dev-machine/*.car; do
+	IPFS_PATH=/data/ipfs ipfs dag import $x
+  done
   (zcat /lambada-base-machine.car.gz | IPFS_PATH=/data/ipfs ipfs dag import &> /tmp/ipfs-base.log) &
 fi
 
