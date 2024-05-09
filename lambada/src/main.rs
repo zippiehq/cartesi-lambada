@@ -24,6 +24,7 @@ use rand::Rng;
 use sequencer::Transaction;
 use serde::{Deserialize, Serialize};
 use sqlite::State;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -103,6 +104,7 @@ async fn main() {
     let rx = Arc::new(Mutex::new(rx));
 
     lambada_worker_subprocess();
+
     // Make sure database is initalized and then load subscriptions from database
     {
         let connection =
@@ -116,9 +118,22 @@ async fn main() {
         connection.execute(query).unwrap();
 
         let mut statement = connection.prepare("SELECT * FROM subscriptions").unwrap();
-
+        let mut automatic_hit = false;
         while let Ok(State::Row) = statement.next() {
             let cid = Cid::try_from(statement.read::<Vec<u8>, _>("appchain_cid").unwrap()).unwrap();
+            if context.automatic_subscribe != "" {
+                let automatic_cid = Cid::try_from(context.automatic_subscribe.clone()).unwrap();
+                if automatic_cid.cmp(&cid) == Ordering::Equal {
+                    automatic_hit = true;
+                }
+            }
+
+            subscriptions.lock().await.push(cid);
+            start_subscriber(Arc::clone(&context), cid, None, None).await;
+        }
+        // XXX this doesn't persist it in database
+        if !automatic_hit && context.automatic_subscribe != "" {
+            let cid = Cid::try_from(context.automatic_subscribe.clone()).unwrap();
             subscriptions.lock().await.push(cid);
             start_subscriber(Arc::clone(&context), cid, None, None).await;
         }
