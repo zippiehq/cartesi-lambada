@@ -10,6 +10,9 @@ pub struct Options {
     #[clap(long, env = "CELESTIA_TESTNET_SEQUENCER_URL")]
     pub celestia_testnet_sequencer_url: String,
 
+    #[clap(long, env = "AVAIL_TESTNET_SEQUENCER_URL")]
+    pub avail_testnet_sequencer_url: String,
+
     #[clap(long, env = "MACHINE_DIR")]
     pub machine_dir: String,
 

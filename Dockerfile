@@ -17,7 +17,24 @@ COPY ./Cargo.lock /build/Cargo.lock
 COPY ./cartesi_lambda /build/cartesi_lambda
 COPY ./lambada /build/lambada
 COPY ./lambada-worker /build/lambada-worker
+COPY ./subscribe-espresso /build/subscribe-espresso
+COPY ./subscribe-celestia /build/subscribe-celestia
+COPY ./subscribe-avail /build/subscribe-avail
+COPY ./subscribe-evm-blocks /build/subscribe-evm-blocks
+COPY ./subscribe-evm-da /build/subscribe-evm-da
+
 ARG RELEASE=--release
+WORKDIR /build/subscribe-avail
+RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
+WORKDIR /build/subscribe-espresso
+RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
+WORKDIR /build/subscribe-celestia
+RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
+WORKDIR /build/subscribe-evm-blocks
+RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
+WORKDIR /build/subscribe-evm-da
+RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
+WORKDIR /build
 RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
 WORKDIR /build/lambada
 RUN PATH=~/.cargo/bin:$PATH cargo rustc --test lambada_test  -- --emit link="lambada_test"
@@ -47,6 +64,11 @@ COPY --from=lambada-image /lambada-base-machine.car.gz /lambada-base-machine.car
 COPY --from=build /build/target/$RELEASE_DIR/lambada /bin/lambada
 COPY --from=build /kernel/Image /Image-riscv64
 COPY --from=build /build/target/$RELEASE_DIR/lambada-worker /bin/lambada-worker
+COPY --from=build /build/subscribe-espresso/target/$RELEASE_DIR/subscribe-espresso /bin/subscribe-espresso
+COPY --from=build /build/subscribe-celestia/target/$RELEASE_DIR/subscribe-celestia /bin/subscribe-celestia
+COPY --from=build /build/subscribe-avail/target/$RELEASE_DIR/subscribe-avail /bin/subscribe-avail
+COPY --from=build /build/subscribe-evm-blocks/target/$RELEASE_DIR/subscribe-evm-blocks /bin/subscribe-evm-blocks
+COPY --from=build /build/subscribe-evm-da/target/$RELEASE_DIR/subscribe-evm-da /bin/subscribe-evm-da
 COPY --from=build /build/lambada_test /bin/lambada_test
 COPY ./cartesi-build.sh /usr/bin/cartesi-build
 COPY ./wait-for-callback.pl /usr/bin/wait-for-callback.pl

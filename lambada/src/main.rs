@@ -32,19 +32,15 @@ use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
-async fn start_subscriber(
-    options: Arc<lambada::Options>,
-    cid: Cid,
-    callback_node_info: Option<(Uri, String, String)>,
-    rx: Option<Arc<Mutex<Receiver<(u64, Option<String>)>>>>,
-) {
+async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid, server_address: String) {
     let executor_options = ExecutorOptions {
         espresso_testnet_sequencer_url: options.espresso_testnet_sequencer_url.clone(),
         celestia_testnet_sequencer_url: options.celestia_testnet_sequencer_url.clone(),
+        avail_testnet_sequencer_url: options.avail_testnet_sequencer_url.clone(),
         ipfs_url: options.ipfs_url.clone(),
         ipfs_write_url: options.ipfs_write_url.clone(),
         db_path: options.db_path.clone(),
-        callback_node_info: callback_node_info,
+        server_address,
         evm_da_url: options.evm_da_url.clone(),
     };
 
@@ -52,7 +48,7 @@ async fn start_subscriber(
     thread::spawn(move || {
         tracing::info!("in thread");
         let _ = task::block_on(async {
-            subscribe(executor_options, cid, rx).await;
+            subscribe(executor_options, cid).await;
         });
         tracing::info!("out of thread");
     });
@@ -129,13 +125,13 @@ async fn main() {
             }
 
             subscriptions.lock().await.push(cid);
-            start_subscriber(Arc::clone(&context), cid, None, None).await;
+            start_subscriber(Arc::clone(&context), cid, addr.to_string()).await;
         }
         // XXX this doesn't persist it in database
         if !automatic_hit && context.automatic_subscribe != "" {
             let cid = Cid::try_from(context.automatic_subscribe.clone()).unwrap();
             subscriptions.lock().await.push(cid);
-            start_subscriber(Arc::clone(&context), cid, None, None).await;
+            start_subscriber(Arc::clone(&context), cid, addr.to_string()).await;
         }
     }
 
@@ -219,7 +215,7 @@ async fn request_handler(
             let client = Client::builder().build::<_, hyper::Body>(https);
 
             let uri: String = format!(
-                "{}/status/latest_block_height",
+                "{}/v0/status/block-height",
                 options.espresso_testnet_sequencer_url.clone()
             )
             .parse()
@@ -253,6 +249,29 @@ async fn request_handler(
                     "application/octet-stream",
                 ))
             {
+                let mut bincoded = false;
+                for query in parsed_query {
+                    match query.0.as_str() {
+                        "bincoded" => match query.1.parse::<bool>() {
+                            Ok(bincoded_opt) => {
+                                bincoded = bincoded_opt;
+                            }
+                            Err(e) => {
+                                tracing::info!("bincoded should be boolean type");
+                                let json_error = serde_json::json!({
+                                    "error": e.to_string(),
+                                });
+                                let json_error = serde_json::to_string(&json_error).unwrap();
+                                return Response::builder()
+                                    .status(StatusCode::BAD_REQUEST)
+                                    .body(Body::from(json_error))
+                                    .unwrap();
+                            }
+                        },
+                        _ => {}
+                    };
+                }
+
                 let mut metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::<Vec<u8>, Vec<u8>>::new();
 
                 metadata.insert(
@@ -260,10 +279,16 @@ async fn request_handler(
                     calculate_sha256("compute".as_bytes()),
                 );
 
-                let data = hyper::body::to_bytes(request.into_body())
+                let mut data = hyper::body::to_bytes(request.into_body())
                     .await
                     .unwrap()
                     .to_vec();
+
+                if bincoded {
+                    let bincoded_data: BincodedCompute = bincode::deserialize(&data).unwrap();
+                    data = bincoded_data.payload;
+                    metadata = bincoded_data.metadata;
+                }
 
                 match compute(
                     Some(data),
@@ -513,24 +538,6 @@ async fn request_handler(
             let response = Response::new(Body::from(json_request));
             response
         }
-        (hyper::Method::POST, ["return_callback", id]) => {
-            let body_bytes = hyper::body::to_bytes(request.into_body()).await.unwrap();
-            let response =
-                serde_json::from_slice::<serde_json::Value>(&body_bytes).expect("get new cid");
-            let mut data = None;
-            if let Some(new_cid) = response.get("output") {
-                data = Some(new_cid.as_str().unwrap().to_string());
-            }
-            ids.lock()
-                .await
-                .insert(id.to_string().parse::<u64>().unwrap(), data.clone());
-            tx.lock()
-                .await
-                .send((id.to_string().parse::<u64>().unwrap(), data))
-                .unwrap();
-            let response = Response::new(Body::empty());
-            response
-        }
         (hyper::Method::GET, ["health"]) => {
             let json_request = r#"{"healthy": "true"}"#;
             let response = Response::new(Body::from(json_request));
@@ -565,35 +572,7 @@ async fn request_handler(
                 statement.bind((1, &cid.to_bytes() as &[u8])).unwrap();
                 statement.next().unwrap();
             }
-
-            let mut node_uri: Option<Uri> = None;
-            let mut node_appchain_cid: Option<String> = None;
-
-            for query in parsed_query {
-                if query.0.eq("node_uri") {
-                    match query.1.parse::<hyper::Uri>() {
-                        Ok(uri) => {
-                            node_uri = Some(uri);
-                        }
-                        Err(_) => {}
-                    }
-                }
-
-                if query.0.eq("node_appchain_cid") {
-                    match query.1.parse::<String>() {
-                        Ok(appchain) => {
-                            node_appchain_cid = Some(appchain);
-                        }
-                        Err(_) => {}
-                    }
-                }
-            }
-            let mut callback_node: Option<(Uri, String, String)> = None;
-            if let (Some(node_uri), Some(node_appchain_cid)) = (node_uri, node_appchain_cid) {
-                callback_node = Some((node_uri, node_appchain_cid, server_address.to_string()));
-            }
-
-            start_subscriber(options, cid, callback_node, Some(rx)).await;
+            start_subscriber(options, cid, server_address.to_string()).await;
             let json_request = r#"{"ok": "true"}"#;
             let response = Response::new(Body::from(json_request));
             response
@@ -943,7 +922,7 @@ async fn request_handler(
     }
 }
 
-async fn compute(
+pub async fn compute(
     data: Option<Vec<u8>>,
     options: Arc<lambada::Options>,
     cid: String,
@@ -954,6 +933,7 @@ async fn compute(
     let ipfs_url = options.ipfs_url.as_str();
     let ipfs_write_url = options.ipfs_write_url.as_str();
 
+    tracing::info!("cid {:?}", cid);
     let state_cid = Cid::try_from(cid.clone()).unwrap();
 
     execute(

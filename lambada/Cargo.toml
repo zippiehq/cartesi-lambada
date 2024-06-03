@@ -9,11 +9,9 @@ edition = "2021"
 tracing = "0.1"
 surf-disco = { git = "https://github.com/EspressoSystems/surf-disco", tag = "v0.4.4" }
 tide-disco = { git = "https://github.com/EspressoSystems/tide-disco", tag = "v0.4.4" }
-jf-primitives = { git = "https://github.com/EspressoSystems/jellyfish" }
 
 async-compatibility-layer = { git = "https://github.com/EspressoSystems/async-compatibility-layer", tag = "1.4.1" }
 ethers = { version = "2.0.4", features = ["ws"] }
-hotshot-query-service = { git = "https://github.com/EspressoSystems/hotshot-query-service", branch = "main" }
 contract-bindings = { git = "https://github.com/EspressoSystems/espresso-sequencer" }
 serde = "1.0.163"
 clap = "4.3.10"
@@ -43,7 +41,6 @@ ark-serialize = "0.4.2"
 tokio-test = "0.4.4"
 serial_test = "3.0.0"
 sequential-test = "0.2.4"
-
 [[test]]
 name = "lambada_test"
 path = "tests/lambada_test.rs"
