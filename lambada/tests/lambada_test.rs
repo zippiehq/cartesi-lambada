@@ -6,7 +6,7 @@ mod lambada_functions_test {
     const APPCHAIN: &str = "bafybeicdhhtwmgpnt7jugvlv3xtp2u4w4mkunpmg6txkkkjhpvnt2buyqa";
     const COMPUTE_CID_EXPECTED: &str =
         "bafybeiayjruyctdk6thwhy67ke7hjgjtwsnaoas3ekj2gapqlwt63khxle";
-    const SUBMIT_HASH_EXPECTED: &str = "COMMIT~j6I86toni18rfwhO1i8_Q0TGyMDyvyKI2Xktt_N0i77Z";
+    const SUBMIT_HASH_EXPECTED: &str = "TX~N0btRzGOg9TAcpYy0Wzckt8bYkZXUSgm1xEQYJRuFznO";
 
     fn subscribe_request_test(server_address: String) {
         tokio_test::block_on(async {

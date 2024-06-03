@@ -27,5 +27,5 @@ futures = "0.3.28"
 os_pipe = {version = "1.1.5", features = ["io_safety"]}
 polling = "3.5.0"
 rand = "0.8.5"
-async-compatibility-layer = { git = "https://github.com/EspressoSystems/async-compatibility-layer", tag = "1.4.1" }
+async-compatibility-layer = { git = "https://github.com/EspressoSystems/async-compatibility-layer", tag = "1.4.1", features = ["logging-utils"] }
 hyper-tls = "0.5.0"
