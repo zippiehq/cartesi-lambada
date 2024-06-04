@@ -3,13 +3,12 @@ use async_std::sync::Mutex;
 use async_std::task;
 use cartesi_lambda::{execute, lambada_worker_subprocess};
 use celestia_rpc::BlobClient;
-use celestia_types::blob::SubmitOptions;
+use celestia_types::blob::GasPrice;
 use celestia_types::nmt::Namespace;
 use celestia_types::Blob;
 use cid::Cid;
 use clap::Parser;
 use commit::Committable;
-use ethers::prelude::*;
 use futures::TryStreamExt;
 use hyper::body::to_bytes;
 use hyper::service::{make_service_fn, service_fn};
@@ -21,7 +20,6 @@ use lambada::executor::BincodedCompute;
 use lambada::executor::{calculate_sha256, subscribe, ExecutorOptions};
 use lambada::Options;
 use rand::Rng;
-use sequencer::Transaction;
 use serde::{Deserialize, Serialize};
 use sqlite::State;
 use std::cmp::Ordering;
@@ -783,7 +781,7 @@ async fn request_handler(
                     .to_vec();
                 tracing::info!("chain type: {:?}", r#type);
                 match r#type.as_str() {
-                    "espresso" => {
+                    /* "espresso" => {
                         let ipfs_client =
                             IpfsClient::from_str(options.ipfs_url.clone().as_str()).unwrap();
                         let chain_info = ipfs_client
@@ -823,13 +821,13 @@ async fn request_handler(
                             .await;
 
                         tracing::info!("submitting result {:?}", res);
-
+                        
                         let json_response = serde_json::json!({
                             "hash": txn.commit(),
                         });
                         let json_response = serde_json::to_string(&json_response).unwrap();
                         return Response::builder().body(Body::from(json_response)).unwrap();
-                    }
+                    } */
                     "celestia" => {
                         let token = match std::env::var("CELESTIA_TESTNET_NODE_AUTH_TOKEN_WRITE") {
                             Ok(token) => token,
@@ -863,7 +861,7 @@ async fn request_handler(
                             Blob::new(Namespace::new_v0(&chain_vm_id.to_be_bytes()).unwrap(), data)
                                 .unwrap();
                         let blobs = [blob];
-                        match client.blob_submit(&blobs, SubmitOptions::default()).await {
+                        match client.blob_submit(&blobs, GasPrice::default()).await {
                             Ok(height) => {
                                 let json_submitting_result = serde_json::json!({
                                     "height": height,
