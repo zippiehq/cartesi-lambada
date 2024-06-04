@@ -27,10 +27,12 @@ use sequencer::block::payload::{parse_ns_payload, NamespaceProof};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use sqlite::State;
+use std::env;
 use std::fs::File;
 use std::io::Read;
 use std::os::fd::{AsFd, AsRawFd};
 use std::rc::Rc;
+use std::str::FromStr;
 use std::time::Duration;
 use surf_disco::Url;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -56,15 +58,18 @@ pub struct SubscribeInput {
     pub height: u64,
     pub opt: ExecutorOptions,
     pub current_cid: Vec<u8>,
-    pub chain_info_cid: Vec<u8>,
     pub chain_vm_id: String,
     pub genesis_cid_text: String,
 }
 
 #[async_std::main]
 async fn main() {
-    let my_stdout = File::create("/tmp/espresso-stdout.log").expect("Failed to create stdout file");
-    let my_stderr = File::create("/tmp/espresso-stderr.log").expect("Failed to create stderr file");
+    let chain_cid = &env::args().collect::<Vec<_>>()[1];
+
+    let my_stdout = File::create(format!("/tmp/{}-espresso-stdout.log", chain_cid))
+        .expect("Failed to create stdout file");
+    let my_stderr = File::create(format!("/tmp/{}-espresso-stderr.log", chain_cid))
+        .expect("Failed to create stderr file");
     let stdout_fd = my_stdout.as_raw_fd();
     let stderr_fd = my_stderr.as_raw_fd();
     unsafe {
@@ -96,17 +101,11 @@ async fn main() {
                     let time_after_execute = SystemTime::now();
                     let subscribe_input =
                         serde_json::from_slice::<SubscribeInput>(&parameter).unwrap();
-                    poller
-                        .modify(&stdin.as_fd(), Event::readable(key.clone() as usize))
-                        .unwrap();
-
                     subscribe_espresso(
                         subscribe_input.height,
                         subscribe_input.opt,
                         &mut Cid::try_from(subscribe_input.current_cid).unwrap(),
-                        Arc::new(Mutex::new(Some(
-                            Cid::try_from(subscribe_input.chain_info_cid).unwrap(),
-                        ))),
+                        Arc::new(Mutex::new(Some(Cid::from_str(chain_cid).unwrap()))),
                         subscribe_input.chain_vm_id,
                         subscribe_input.genesis_cid_text,
                     )
@@ -157,7 +156,6 @@ async fn subscribe_espresso(
         let payload = block.payload();
 
         let block_timestamp: u64 = block.header().timestamp;
-        tracing::info!("block height {:?}", block.header().height);
         let espresso_block_timestamp = block_timestamp.to_be_bytes().to_vec();
 
         let espresso_tx_namespace = chain_vm_id.to_string();

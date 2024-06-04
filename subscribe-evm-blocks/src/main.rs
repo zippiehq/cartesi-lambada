@@ -12,6 +12,7 @@ use polling::{Event, Events, Poller};
 use serde::{Deserialize, Serialize};
 use sqlite::State;
 use std::collections::HashMap;
+use std::env;
 use std::fs::File;
 use std::io::Read;
 use std::os::fd::AsFd;
@@ -39,7 +40,6 @@ pub struct SubscribeInput {
     pub height: u64,
     pub opt: ExecutorOptions,
     pub current_cid: Vec<u8>,
-    pub chain_info_cid: Vec<u8>,
     pub chain_vm_id: String,
     pub genesis_cid_text: String,
 }
@@ -50,10 +50,12 @@ pub struct BincodedCompute {
 }
 #[async_std::main]
 async fn main() {
-    let my_stdout =
-        File::create("/tmp/evm-blocks-stdout.log").expect("Failed to create stdout file");
-    let my_stderr =
-        File::create("/tmp/evm-blocks-stderr.log").expect("Failed to create stderr file");
+    let chain_cid = &env::args().collect::<Vec<_>>()[1];
+
+    let my_stdout = File::create(format!("/tmp/{}-evm-blocks-stdout.log", chain_cid))
+        .expect("Failed to create stdout file");
+    let my_stderr = File::create(format!("/tmp/{}-evm-blocks-stderr.log", chain_cid))
+        .expect("Failed to create stderr file");
     let stdout_fd = my_stdout.as_raw_fd();
     let stderr_fd = my_stderr.as_raw_fd();
     unsafe {
@@ -86,9 +88,6 @@ async fn main() {
                     let time_after_execute = SystemTime::now();
                     let subscribe_input =
                         serde_json::from_slice::<SubscribeInput>(&parameter).unwrap();
-                    poller
-                        .modify(&stdin.as_fd(), Event::readable(key.clone() as usize))
-                        .unwrap();
                     subscribe_evm_blocks(
                         subscribe_input.height,
                         subscribe_input.opt,

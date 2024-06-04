@@ -16,11 +16,13 @@ use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use sqlite::State;
 use std::collections::HashMap;
+use std::env;
 use std::fs::File;
 use std::io::Read;
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::fd::AsRawFd;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
@@ -45,7 +47,6 @@ pub struct SubscribeInput {
     pub height: u64,
     pub opt: ExecutorOptions,
     pub current_cid: Vec<u8>,
-    pub chain_info_cid: Vec<u8>,
     pub chain_vm_id: String,
     pub genesis_cid_text: String,
 }
@@ -56,8 +57,12 @@ pub struct BincodedCompute {
 }
 #[async_std::main]
 async fn main() {
-    let my_stdout = File::create("/tmp/avail-stdout.log").expect("Failed to create stdout file");
-    let my_stderr = File::create("/tmp/avail-stderr.log").expect("Failed to create stderr file");
+    let chain_cid = &env::args().collect::<Vec<_>>()[1];
+
+    let my_stdout = File::create(format!("/tmp/{}-avail-stdout.log", chain_cid))
+        .expect("Failed to create stdout file");
+    let my_stderr = File::create(format!("/tmp/{}-avail-stderr.log", chain_cid))
+        .expect("Failed to create stderr file");
     let stdout_fd = my_stdout.as_raw_fd();
     let stderr_fd = my_stderr.as_raw_fd();
     unsafe {
@@ -89,12 +94,9 @@ async fn main() {
                     let time_after_execute = SystemTime::now();
                     let subscribe_input =
                         serde_json::from_slice::<SubscribeInput>(&parameter).unwrap();
-                    poller
-                        .modify(&stdin.as_fd(), Event::readable(key.clone() as usize))
-                        .unwrap();
                     subscribe_avail(
                         subscribe_input.height,
-                        subscribe_input.chain_info_cid,
+                        Cid::from_str(chain_cid).unwrap().to_bytes(),
                         subscribe_input.opt,
                         &mut Cid::try_from(subscribe_input.current_cid).unwrap(),
                         subscribe_input.chain_vm_id,

@@ -1,6 +1,6 @@
 use sha3::{Digest, Sha3_256};
 
-use cid::Cid;
+use cid::{Cid, CidGeneric};
 use futures_util::TryStreamExt;
 use hyper::Request;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use sqlite::State;
 use std::collections::HashMap;
 use std::io::Write;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -28,7 +29,6 @@ pub struct SubscribeInput {
     pub height: u64,
     pub opt: ExecutorOptions,
     pub current_cid: Vec<u8>,
-    pub chain_info_cid: Vec<u8>,
     pub chain_vm_id: String,
     pub genesis_cid_text: String,
 }
@@ -173,251 +173,77 @@ pub async fn subscribe(opt: ExecutorOptions, appchain: Cid) {
             .to_string();
 
         tracing::info!("chain type: {:?}", r#type);
+        let mut subscribe_path = String::new();
         match r#type.as_str() {
             "avail" => {
-                let input = SubscribeInput {
-                    height: current_height,
-                    opt: opt.clone(),
-                    current_cid: current_cid.to_bytes(),
-                    chain_info_cid: current_chain_info_cid.lock().unwrap().unwrap().to_bytes(),
-                    chain_vm_id: chain_vm_id.clone(),
-                    genesis_cid_text: genesis_cid_text.clone(),
-                };
-                let subscribe_avail = String::from("/bin/subscribe-avail");
-
-                let subscribe_avail_child = Command::new(subscribe_avail)
-                    .stdout(Stdio::piped())
-                    .stdin(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .unwrap();
-                let subscribe_avail_child = Arc::new(Mutex::new(subscribe_avail_child));
-                let mut execute_parameter_bytes = Vec::new();
-                let data_json = serde_json::to_string(&input).unwrap();
-                execute_parameter_bytes.extend(data_json.as_bytes().len().to_le_bytes());
-                execute_parameter_bytes.extend(data_json.as_bytes().to_vec());
-                {
-                    let mut subscribe_avail_child_stdin = subscribe_avail_child.lock().unwrap();
-
-                    let subscribe_avail_child_stdin = subscribe_avail_child_stdin
-                        .stdin
-                        .as_mut()
-                        .expect("Failed to open avail binary stdin");
-
-                    subscribe_avail_child_stdin
-                        .write_all(&execute_parameter_bytes)
-                        .unwrap();
-                }
-
-                //Waits for avail child to finish
-                let subscribe_avail_child = Arc::clone(&subscribe_avail_child);
-                loop {
-                    let mut child = subscribe_avail_child.lock().unwrap();
-                    match child.try_wait() {
-                        Ok(Some(_)) => {
-                            break;
-                        }
-                        _ => {}
-                    }
-                    drop(child);
-                    std::thread::sleep(std::time::Duration::from_secs(5));
-                }
+                subscribe_path = String::from("/bin/subscribe-avail");
             }
             "espresso" => {
-                let input = SubscribeInput {
-                    height: current_height,
-                    opt: opt.clone(),
-                    current_cid: current_cid.to_bytes(),
-                    chain_info_cid: current_chain_info_cid.lock().unwrap().unwrap().to_bytes(),
-                    chain_vm_id: chain_vm_id.clone(),
-                    genesis_cid_text: genesis_cid_text.clone(),
-                };
-                let subscribe_espresso = String::from("/bin/subscribe-espresso");
-
-                let subscribe_espresso_child = Command::new(subscribe_espresso)
-                    .stdout(Stdio::piped())
-                    .stdin(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .unwrap();
-                let subscribe_espresso_child = Arc::new(Mutex::new(subscribe_espresso_child));
-                let mut execute_parameter_bytes = Vec::new();
-                let data_json = serde_json::to_string(&input).unwrap();
-                execute_parameter_bytes.extend(data_json.as_bytes().len().to_le_bytes());
-                execute_parameter_bytes.extend(data_json.as_bytes().to_vec());
-
-                {
-                    let mut subscribe_espresso_child_stdin =
-                        subscribe_espresso_child.lock().unwrap();
-                    let subscribe_espresso_child_stdin = subscribe_espresso_child_stdin
-                        .stdin
-                        .as_mut()
-                        .expect("Failed to open espresso binary stdin");
-
-                    subscribe_espresso_child_stdin
-                        .write_all(&execute_parameter_bytes)
-                        .unwrap();
-                }
-                //Waits for espresso child to finish
-                let subscribe_espresso_child = Arc::clone(&subscribe_espresso_child);
-                loop {
-                    let mut child = subscribe_espresso_child.lock().unwrap();
-                    match child.try_wait() {
-                        Ok(Some(_)) => {
-                            break;
-                        }
-                        _ => {}
-                    }
-                    drop(child);
-                    std::thread::sleep(std::time::Duration::from_secs(5));
-                }
+                subscribe_path = String::from("/bin/subscribe-espresso");
             }
             "celestia" => {
-                let input = SubscribeInput {
-                    height: current_height,
-                    opt: opt.clone(),
-                    current_cid: current_cid.to_bytes(),
-                    chain_info_cid: current_chain_info_cid.lock().unwrap().unwrap().to_bytes(),
-                    chain_vm_id: chain_vm_id.clone(),
-                    genesis_cid_text: genesis_cid_text.clone(),
-                };
-                let subscribe_celestia = String::from("/bin/subscribe-celestia");
-
-                let subscribe_celestia_child = Command::new(subscribe_celestia)
-                    .stdout(Stdio::piped())
-                    .stdin(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .unwrap();
-                let subscribe_celestia_child = Arc::new(Mutex::new(subscribe_celestia_child));
-                let mut execute_parameter_bytes = Vec::new();
-                let data_json = serde_json::to_string(&input).unwrap();
-                execute_parameter_bytes.extend(data_json.as_bytes().len().to_le_bytes());
-                execute_parameter_bytes.extend(data_json.as_bytes().to_vec());
-
-                let mut subscribe_celestia_child_stdin = subscribe_celestia_child.lock().unwrap();
-                let subscribe_celestia_child_stdin = subscribe_celestia_child_stdin
-                    .stdin
-                    .as_mut()
-                    .expect("Failed to open celestia subscribe stdin");
-
-                subscribe_celestia_child_stdin
-                    .write_all(&execute_parameter_bytes)
-                    .unwrap();
-
-                //Waits for celestia child to finish
-                let subscribe_celestia_child = Arc::clone(&subscribe_celestia_child);
-                loop {
-                    let mut child = subscribe_celestia_child.lock().unwrap();
-                    match child.try_wait() {
-                        Ok(Some(_)) => {
-                            break;
-                        }
-                        _ => {}
-                    }
-                    drop(child);
-                    std::thread::sleep(std::time::Duration::from_secs(5));
-                }
+                subscribe_path = String::from("/bin/subscribe-celestia");
             }
             "evm-da" => {
-                let input = SubscribeInput {
-                    height: current_height,
-                    opt: opt.clone(),
-                    current_cid: current_cid.to_bytes(),
-                    chain_info_cid: current_chain_info_cid.lock().unwrap().unwrap().to_bytes(),
-                    chain_vm_id: chain_vm_id.clone(),
-                    genesis_cid_text: genesis_cid_text.clone(),
-                };
-                let subscribe_evm_da = String::from("/bin/subscribe-evm-da");
-
-                let subscribe_evm_da_child = Command::new(subscribe_evm_da)
-                    .stdout(Stdio::piped())
-                    .stdin(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .unwrap();
-                let subscribe_evm_da_child = Arc::new(Mutex::new(subscribe_evm_da_child));
-                let mut execute_parameter_bytes = Vec::new();
-                let data_json = serde_json::to_string(&input).unwrap();
-                execute_parameter_bytes.extend(data_json.as_bytes().len().to_le_bytes());
-                execute_parameter_bytes.extend(data_json.as_bytes().to_vec());
-
-                let mut subscribe_evm_da_child_stdin = subscribe_evm_da_child.lock().unwrap();
-                let subscribe_evm_da_child_stdin = subscribe_evm_da_child_stdin
-                    .stdin
-                    .as_mut()
-                    .expect("Failed to open celestia subscribe stdin");
-
-                subscribe_evm_da_child_stdin
-                    .write_all(&execute_parameter_bytes)
-                    .unwrap();
-
-                //Waits for evm-da child to finish
-                let subscribe_evm_da_child = Arc::clone(&subscribe_evm_da_child);
-                loop {
-                    let mut child = subscribe_evm_da_child.lock().unwrap();
-                    match child.try_wait() {
-                        Ok(Some(_)) => {
-                            break;
-                        }
-                        _ => {}
-                    }
-                    drop(child);
-                    std::thread::sleep(std::time::Duration::from_secs(5));
-                }
+                subscribe_path = String::from("/bin/subscribe-evm-da");
             }
-
             "evm-blocks" => {
-                let input = SubscribeInput {
-                    height: current_height,
-                    opt: opt.clone(),
-                    current_cid: current_cid.to_bytes(),
-                    chain_info_cid: current_chain_info_cid.lock().unwrap().unwrap().to_bytes(),
-                    chain_vm_id: chain_vm_id.clone(),
-                    genesis_cid_text: genesis_cid_text.clone(),
-                };
-                let subscribe_evm_blocks = String::from("/bin/subscribe-evm-blocks");
-
-                let subscribe_evm_blocks_child = Command::new(subscribe_evm_blocks)
-                    .stdout(Stdio::piped())
-                    .stdin(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .unwrap();
-                let subscribe_evm_blocks_child = Arc::new(Mutex::new(subscribe_evm_blocks_child));
-                let mut execute_parameter_bytes = Vec::new();
-                let data_json = serde_json::to_string(&input).unwrap();
-                execute_parameter_bytes.extend(data_json.as_bytes().len().to_le_bytes());
-                execute_parameter_bytes.extend(data_json.as_bytes().to_vec());
-
-                let mut subscribe_evm_blocks_child_stdin =
-                    subscribe_evm_blocks_child.lock().unwrap();
-                let subscribe_evm_blocks_child_stdin = subscribe_evm_blocks_child_stdin
-                    .stdin
-                    .as_mut()
-                    .expect("Failed to open celestia subscribe stdin");
-
-                subscribe_evm_blocks_child_stdin
-                    .write_all(&execute_parameter_bytes)
-                    .unwrap();
-
-                //Waits for evm-blocks child to finish
-                let subscribe_evm_blocks_child = Arc::clone(&subscribe_evm_blocks_child);
-                loop {
-                    let mut child = subscribe_evm_blocks_child.lock().unwrap();
-                    match child.try_wait() {
-                        Ok(Some(_)) => {
-                            break;
-                        }
-                        _ => {}
-                    }
-                    drop(child);
-                    std::thread::sleep(std::time::Duration::from_secs(5));
-                }
+                subscribe_path = String::from("/bin/subscribe-evm-blocks");
             }
             _ => tracing::info!("Unknown sequencer type: {}", r#type),
         }
+        start_subprocess(
+            current_height,
+            opt.clone(),
+            current_cid.to_bytes(),
+            current_chain_info_cid.lock().unwrap().unwrap().to_bytes(),
+            chain_vm_id.clone(),
+            genesis_cid_text.clone(),
+            subscribe_path,
+        )
+        .expect("Failed to subscribe");
     }
+}
+
+fn start_subprocess(
+    height: u64,
+    opt: ExecutorOptions,
+    current_cid: Vec<u8>,
+    chain_info_cid: Vec<u8>,
+    chain_vm_id: String,
+    genesis_cid_text: String,
+    subscribe_path: String,
+) -> std::io::Result<std::process::ExitStatus> {
+    let chain_cid = Cid::try_from(chain_info_cid.clone()).unwrap().to_string();
+    let input = SubscribeInput {
+        height,
+        opt,
+        current_cid,
+        chain_vm_id,
+        genesis_cid_text,
+    };
+
+    let mut subscribe_child = Command::new(subscribe_path)
+        .arg(chain_cid)
+        .stdout(Stdio::piped())
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut execute_parameter_bytes = Vec::new();
+    let data_json = serde_json::to_string(&input).unwrap();
+    execute_parameter_bytes.extend(data_json.as_bytes().len().to_le_bytes());
+    execute_parameter_bytes.extend(data_json.as_bytes().to_vec());
+
+    let subscribe_child_stdin = subscribe_child
+        .stdin
+        .as_mut()
+        .expect("Failed to open subscribe child stdin");
+
+    subscribe_child_stdin
+        .write_all(&execute_parameter_bytes)
+        .unwrap();
+    subscribe_child.wait()
 }
 
 async fn get_chain_info_cid(opt: &ExecutorOptions, current_cid: Cid) -> Option<Cid> {
