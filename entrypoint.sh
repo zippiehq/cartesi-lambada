@@ -29,18 +29,21 @@ if [ x$IPFS_URL = x ]; then
   (zcat /lambada-base-machine.car.gz | IPFS_PATH=/data/ipfs ipfs dag import &> /tmp/ipfs-base.log) &
 fi
 
-
 if [ -z "$IPFS_WRITE_URL" ]; then
   IPFS_WRITE_URL=$IPFS_URL
 fi
 export IPFS_WRITE_URL
 
 if [ x$ESPRESSO_TESTNET_SEQUENCER_URL = x ]; then
-   ESPRESSO_TESTNET_SEQUENCER_URL=https://query.gibraltar.aws.espresso.network
+   ESPRESSO_TESTNET_SEQUENCER_URL=https://query.cappuccino.testnet.espresso.network
 fi
 
 if [ x$CELESTIA_TESTNET_SEQUENCER_URL = x ]; then
    CELESTIA_TESTNET_SEQUENCER_URL=http://0.0.0.0:26658
+fi
+
+if [ x$AVAIL_TESTNET_SEQUENCER_URL = x ]; then
+   AVAIL_TESTNET_SEQUENCER_URL=wss://turing-rpc.avail.so/ws
 fi
 
 if [ x$EVM_DA_URL = x ]; then
@@ -57,6 +60,7 @@ if [ "$RUN_TESTS" = "true" ]; then
    export RUST_BACKTRACE=full
    /bin/lambada --espresso-testnet-sequencer-url $ESPRESSO_TESTNET_SEQUENCER_URL \
 	   --celestia-testnet-sequencer-url $CELESTIA_TESTNET_SEQUENCER_URL \
+      --avail-testnet-sequencer-url $AVAIL_TESTNET_SEQUENCER_URL \
 	   --machine-dir=/data/base-machines/lambada-base-machine \
 	   --ipfs-url $IPFS_URL \
 	   --evm-da-url $EVM_DA_URL \
@@ -69,6 +73,7 @@ if [ "$RUN_TESTS" = "true" ]; then
 else
    LAMBADA_WORKER=/bin/lambada-worker RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --espresso-testnet-sequencer-url $ESPRESSO_TESTNET_SEQUENCER_URL \
 	   --celestia-testnet-sequencer-url $CELESTIA_TESTNET_SEQUENCER_URL \
+      --avail-testnet-sequencer-url $AVAIL_TESTNET_SEQUENCER_URL \
 	   --machine-dir=/data/base-machines/lambada-base-machine \
 	   --ipfs-url $IPFS_URL \
 	   --evm-da-url $EVM_DA_URL \
