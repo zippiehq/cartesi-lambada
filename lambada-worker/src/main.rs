@@ -12,11 +12,12 @@ use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use nix::libc;
 use nix::sys::wait::waitpid;
 use nix::unistd::{fork, setsid, ForkResult, Pid};
-use os_pipe::PipeReader;
 use os_pipe::{dup_stdin, dup_stdout};
+use os_pipe::{PipeReader, PipeWriter};
 use polling::{Event, Events, Poller};
 use rs_car_ipfs::single_file::read_single_file_seek;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use sha3::{Digest, Sha3_256};
 use std::collections::HashMap;
 use std::fs::File;
@@ -28,11 +29,12 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 use std::{thread, time::SystemTime};
-
 const HTIF_YIELD_MANUAL_REASON_RX_ACCEPTED_DEF: u16 = 0x1;
 const HTIF_YIELD_MANUAL_REASON_RX_REJECTED_DEF: u16 = 0x2;
 
 const EXCEPTION: u16 = 0x4;
+const SPAWN_COMPUTE: u16 = 0x27;
+const JOIN_COMPUTE: u16 = 0x28;
 const CURRENT_STATE_CID: u16 = 0x20;
 const SET_STATE_CID: u16 = 0x21;
 const METADATA: u16 = 0x22;
@@ -55,6 +57,7 @@ fn main() {
         libc::close(2);
         libc::dup2(stderr_fd, 2);
     }
+
     let stdin = dup_stdin().unwrap();
     let poller = Poller::new().unwrap();
     let key = &stdin.as_fd().as_raw_fd();
@@ -63,7 +66,8 @@ fn main() {
             .add(&stdin.as_fd(), Event::readable(key.clone() as usize))
             .unwrap()
     };
-    let mut children_hash_map: HashMap<usize, (Pid, Rc<PipeReader>)> = HashMap::new();
+    let mut children_hash_map: HashMap<usize, (Pid, Rc<PipeReader>, Option<Rc<PipeWriter>>, Rc<PipeWriter>)> =
+        HashMap::new();
     let mut events = Events::new();
     loop {
         events.clear();
@@ -74,102 +78,140 @@ fn main() {
         for ev in events.iter() {
             if ev.key == key.clone() as usize {
                 if let Ok(parameter) = read_message(&stdin) {
-                    let (reader_for_parent, writer_for_parent) = os_pipe::pipe().unwrap();
-                    let (reader_for_child, writer_for_child) = os_pipe::pipe().unwrap();
-                    let execute_parameter =
-                        serde_json::from_slice::<ExecuteParameters>(&parameter).unwrap();
-                    match unsafe { fork() } {
-                        Ok(ForkResult::Parent { child, .. }) => {
-                            drop(reader_for_parent);
-                            drop(writer_for_child);
+                    tracing::info!("Run forking");
 
-                            write_message(&writer_for_parent, &execute_parameter).unwrap();
-
-                            drop(writer_for_parent);
-                            let reader_for_child = Rc::new(reader_for_child);
-                            children_hash_map.insert(
-                                reader_for_child.clone().as_fd().as_raw_fd() as usize,
-                                (child, reader_for_child.clone()),
-                            );
-                            unsafe {
-                                poller
-                                    .add(
-                                        &reader_for_child.as_fd(),
-                                        Event::readable(reader_for_child.as_raw_fd() as usize),
-                                    )
-                                    .unwrap();
-                            }
-                            poller
-                                .modify(&stdin.as_fd(), Event::readable(key.clone() as usize))
-                                .unwrap();
-                        }
-                        Ok(ForkResult::Child) => {
-                            drop(reader_for_child);
-                            drop(writer_for_parent);
-                            let random_number = rand::random::<u64>();
-                            let my_stdout =
-                                File::create(format!("/tmp/{}-stdout.log", random_number))
-                                    .expect("Failed to create stdout file");
-                            let my_stderr =
-                                File::create(format!("/tmp/{}-stderr.log", random_number))
-                                    .expect("Failed to create stderr file");
-                            let stdout_fd = my_stdout.as_raw_fd();
-                            let stderr_fd = my_stderr.as_raw_fd();
-                            unsafe {
-                                libc::close(1);
-                                libc::close(2);
-                                libc::dup2(stdout_fd, 1);
-                                libc::dup2(stderr_fd, 2);
-                            }
-                            if let Ok(parent_input) = read_message(&reader_for_parent) {
-                                let input =
-                                    serde_json::from_slice::<ExecuteParameters>(&parent_input)
-                                        .unwrap();
-
-                                task::block_on(async {
-                                    setup_logging();
-                                    setup_backtrace();
-                                    let result = execute(
-                                        input.ipfs_url.as_str(),
-                                        input.ipfs_write_url.as_str(),
-                                        input.payload,
-                                        Cid::try_from(input.state_cid).unwrap(),
-                                        input
-                                            .metadata
-                                            .iter()
-                                            .map(|(k, v)| {
-                                                (hex::decode(&k).unwrap(), hex::decode(&v).unwrap())
-                                            })
-                                            .collect::<HashMap<Vec<u8>, Vec<u8>>>(),
-                                        input.max_cycles_input,
-                                    )
-                                    .await;
-                                    let response = ExecuteResult {
-                                        identifier: input.identifier,
-                                        result,
-                                    };
-                                    write_message(&writer_for_child, &response).unwrap();
-                                });
-                            }
-                            drop(reader_for_parent);
-                            std::process::exit(0);
-                        }
-                        Err(_) => {}
-                    }
+                    run_forking(
+                        parameter,
+                        &mut children_hash_map,
+                        &poller,
+                        &stdin,
+                        key,
+                        None,
+                    );
                 }
             } else if children_hash_map.contains_key(&ev.key) {
                 tracing::info!("Reading event came in");
-                let reader_for_child = children_hash_map.remove_entry(&ev.key).unwrap();
-                if let Ok(execute_output) = read_message(&reader_for_child.1 .1.clone()) {
-                    let execute_result = serde_json::from_slice::<ExecuteResult>(&execute_output)
-                        .expect("error parse execute result");
-                    let stdout = dup_stdout().unwrap();
-                    write_message(&stdout, &execute_result).unwrap();
-                    drop(stdout);
+                let child = children_hash_map.remove_entry(&ev.key).unwrap();
+                if let Ok(execute_output) = read_message(&child.1 .1.clone()) {
+                    if let Ok(execute_result) =
+                        serde_json::from_slice::<ExecuteResult>(&execute_output)
+                    {
+                        tracing::info!("Sending Execute result");
+
+                        if let Some(output_pipe) = child.1 .2 {
+                            write_message(&output_pipe, &execute_result).unwrap();
+                            drop(output_pipe);
+                        } else {
+                            let output_pipe = dup_stdout().unwrap();
+                            write_message(&output_pipe, &execute_result).unwrap();
+                            drop(output_pipe);
+                        }
+                        waitpid(child.1 .0, None).unwrap();
+                    } else if let Ok(_) =
+                        serde_json::from_slice::<ExecuteParameters>(&execute_output)
+                    {
+                        tracing::info!("JOIN_COMPUTE Forking");
+
+                        run_forking(
+                            execute_output,
+                            &mut children_hash_map,
+                            &poller,
+                            &stdin,
+                            key,
+                            Some(child.1 .3),
+                        );
+                    }
                 }
-                waitpid(reader_for_child.1 .0, None).unwrap();
             }
         }
+    }
+}
+
+fn run_forking(
+    parameter: Vec<u8>,
+    children_hash_map: &mut HashMap<usize, (Pid, Rc<PipeReader>, Option<Rc<PipeWriter>>, Rc<PipeWriter>)>,
+    poller: &Poller,
+    stdin: &PipeReader,
+    key: &i32,
+    requestor_pipe: Option<Rc<PipeWriter>>,
+) {
+    let (reader_for_parent, writer_for_parent) = os_pipe::pipe().unwrap();
+    let (reader_for_child, writer_for_child) = os_pipe::pipe().unwrap();
+    let execute_parameter = serde_json::from_slice::<ExecuteParameters>(&parameter).unwrap();
+    match unsafe { fork() } {
+        Ok(ForkResult::Parent { child, .. }) => {
+            drop(reader_for_parent);
+            drop(writer_for_child);
+
+            write_message(&writer_for_parent, &execute_parameter).unwrap();
+
+            let reader_for_child = Rc::new(reader_for_child);
+            let child_writer = Rc::new(writer_for_parent);
+
+            children_hash_map.insert(
+                reader_for_child.clone().as_fd().as_raw_fd() as usize,
+                (child, reader_for_child.clone(), requestor_pipe, child_writer),
+            );
+
+            unsafe {
+                poller
+                    .add(
+                        &reader_for_child.as_fd(),
+                        Event::readable(reader_for_child.as_raw_fd() as usize),
+                    )
+                    .unwrap();
+            }
+            poller
+                .modify(&stdin.as_fd(), Event::readable(key.clone() as usize))
+                .unwrap();
+        }
+        Ok(ForkResult::Child) => {
+            drop(reader_for_child);
+            let random_number = rand::random::<u64>();
+            let my_stdout = File::create(format!("/tmp/{}-stdout.log", random_number))
+                .expect("Failed to create stdout file");
+            let my_stderr = File::create(format!("/tmp/{}-stderr.log", random_number))
+                .expect("Failed to create stderr file");
+            let stdout_fd = my_stdout.as_raw_fd();
+            let stderr_fd = my_stderr.as_raw_fd();
+            unsafe {
+                libc::close(1);
+                libc::close(2);
+                libc::dup2(stdout_fd, 1);
+                libc::dup2(stderr_fd, 2);
+            }
+            if let Ok(parent_input) = read_message(&reader_for_parent) {
+                let input = serde_json::from_slice::<ExecuteParameters>(&parent_input).unwrap();
+
+                task::block_on(async {
+                    setup_logging();
+                    setup_backtrace();
+                    let result = execute(
+                        input.ipfs_url.as_str(),
+                        input.ipfs_write_url.as_str(),
+                        input.payload,
+                        Cid::try_from(input.state_cid).unwrap(),
+                        input
+                            .metadata
+                            .iter()
+                            .map(|(k, v)| (hex::decode(&k).unwrap(), hex::decode(&v).unwrap()))
+                            .collect::<HashMap<Vec<u8>, Vec<u8>>>(),
+                        input.max_cycles_input,
+                        &writer_for_child,
+                        &reader_for_parent,
+                    )
+                    .await;
+                    let response = ExecuteResult {
+                        identifier: input.identifier,
+                        result,
+                    };
+                    write_message(&writer_for_child, &response).unwrap();
+                });
+            }
+            drop(reader_for_parent);
+            std::process::exit(0);
+        }
+        Err(_) => {}
     }
 }
 
@@ -204,11 +246,11 @@ async fn execute(
     state_cid: Cid,
     metadata: HashMap<Vec<u8>, Vec<u8>>,
     max_cycles_input: Option<u64>,
+    writer_for_child: &PipeWriter,
+    reader_for_parent: &PipeReader,
 ) -> Result<Vec<u8>, serde_error::Error> {
-    let mut thread_execute: HashMap<
-        Vec<u8>,
-        thread::JoinHandle<Result<Vec<u8>, serde_error::Error>>,
-    > = HashMap::<Vec<u8>, thread::JoinHandle<Result<Vec<u8>, serde_error::Error>>>::new();
+    let mut thread_execute: HashMap<Vec<u8>, Rc<PipeReader>> =
+        HashMap::<Vec<u8>, Rc<PipeReader>>::new();
     tracing::info!("state cid {:?}", state_cid.to_string());
     let time_before_receive_app_cid = SystemTime::now();
     let mut measure_execution_time = false;
@@ -522,7 +564,6 @@ async fn execute(
         let length = data & M32; // length
 
         tracing::info!("got reason {} cmd {} data {}", reason, cmd, length);
-
         match reason {
             SET_STATE_CID => {
                 let cid_raw = machine
@@ -685,6 +726,112 @@ async fn execute(
                     .send_cmio_response(0, &metadata_result.clone())
                     .unwrap();
                 tracing::info!("metadata info was written");
+            }
+            /*SPAWN_COMPUTE => {
+                let cid_bytes = machine
+                    .read_memory(PMA_CMIO_TX_BUFFER_START_DEF, length)
+                    .unwrap();
+                let payload = machine
+                    .read_memory(PMA_CMIO_TX_BUFFER_START_DEF, length)
+                    .unwrap();
+
+                let mut metadata: HashMap<String, String> = HashMap::<String, String>::new();
+
+                metadata.insert(String::from("sequencer"), String::from("spawn"));
+
+                let mut hasher = Sha256::new();
+                hasher.update(cid_bytes.clone());
+                hasher.update(payload.clone());
+                let spawn_hash = hasher.finalize().to_vec();
+                tracing::info!("spawning new execute thread");
+
+                thread_execute.insert(spawn_hash, compute_output_reader.clone());
+                let execute_parameter = ExecuteParameters {
+                    ipfs_url: ipfs_url.to_string(),
+                    ipfs_write_url: ipfs_write_url.to_string(),
+                    payload: Some(payload),
+                    state_cid: cid_bytes,
+                    metadata,
+                    max_cycles_input,
+                    identifier: String::new(),
+                };
+
+                let mut execute_parameter_bytes = Vec::new();
+                let data_json = serde_json::to_string(&execute_parameter).unwrap();
+                execute_parameter_bytes.extend(data_json.as_bytes().len().to_le_bytes());
+                execute_parameter_bytes.extend(data_json.as_bytes().to_vec());
+
+                write_message(&compute_writer, &execute_parameter_bytes).unwrap();
+            }*/
+            JOIN_COMPUTE => {
+                let cid_length = u64::from_be_bytes(
+                    machine
+                        .read_memory(PMA_CMIO_TX_BUFFER_START_DEF, 8)
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                );
+
+                let cid_bytes = machine
+                    .read_memory(PMA_CMIO_TX_BUFFER_START_DEF + 8, cid_length)
+                    .unwrap();
+
+                let payload_length = u64::from_be_bytes(
+                    machine
+                        .read_memory(PMA_CMIO_TX_BUFFER_START_DEF + 8 + cid_length, 8)
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                );
+
+                let payload = machine
+                    .read_memory(
+                        PMA_CMIO_TX_BUFFER_START_DEF + 16 + cid_length,
+                        payload_length,
+                    )
+                    .unwrap();
+
+                let mut hasher = Sha256::new();
+                hasher.update(cid_bytes.clone());
+                hasher.update(payload.clone());
+                let spawn_hash = hasher.finalize().to_vec();
+                let mut execute_result = None;
+                if let Some(reader) = thread_execute.remove(&spawn_hash) {
+                    execute_result = Some(read_message(&reader));
+                    tracing::info!("JOIN_COMPUTE execute result {:?}", execute_result);
+                } else {
+                    let mut metadata: HashMap<String, String> = HashMap::<String, String>::new();
+
+                    metadata.insert(String::from("sequencer"), String::from("spawn"));
+
+                    let execute_parameter = ExecuteParameters {
+                        ipfs_url: ipfs_url.to_string(),
+                        ipfs_write_url: ipfs_write_url.to_string(),
+                        payload: Some(payload),
+                        state_cid: cid_bytes,
+                        metadata,
+                        max_cycles_input,
+                        identifier: String::new(),
+                    };
+                    let mut execute_parameter_bytes = Vec::new();
+                    let data_json = serde_json::to_string(&execute_parameter).unwrap();
+                    execute_parameter_bytes.extend(data_json.as_bytes().len().to_le_bytes());
+                    execute_parameter_bytes.extend(data_json.as_bytes().to_vec());
+
+                    write_message(&writer_for_child, &execute_parameter_bytes).unwrap();
+                    tracing::info!("JOIN_COMPUTE waiting for result");
+                    let execute_result = read_message(&reader_for_parent);
+                    tracing::info!("JOIN_COMPUTE result {:?}", execute_result);
+                }
+
+                match execute_result.unwrap() {
+                    Ok(cid) => {
+                        machine.send_cmio_response(0, &cid).unwrap();
+                    }
+                    Err(_) => {
+                        machine.send_cmio_response(1, &[]).unwrap();
+                    }
+                }
             }
             HINT => {
                 let hint = machine
@@ -921,10 +1068,11 @@ pub fn write_message<T>(mut pipe: &os_pipe::PipeWriter, data: &T) -> Result<(), 
 where
     T: ?Sized + Serialize,
 {
+    let mut data_vector = Vec::new();
     let data_json = serde_json::to_string(&data).unwrap();
-    pipe.write(&mut data_json.as_bytes().len().to_le_bytes())
-        .unwrap();
-    pipe.write(&mut data_json.as_bytes()).unwrap();
+    data_vector.extend(data_json.as_bytes().len().to_le_bytes());
+    data_vector.extend(data_json.as_bytes().to_vec());
+    pipe.write_all(&data_vector).unwrap();
     Ok(())
 }
 
