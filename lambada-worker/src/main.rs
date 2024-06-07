@@ -87,6 +87,7 @@ fn main() {
                         &stdin,
                         key,
                         None,
+                        vec![36, 37, 36, 34, 37, 37, 36, 37, 1, 32, 37, 40, 1]
                     );
                 }
             } else if children_hash_map.contains_key(&ev.key) {
@@ -119,6 +120,7 @@ fn main() {
                             &stdin,
                             key,
                             Some(child.1 .3),
+                            vec![36, 37, 36, 34, 37, 37, 36, 37, 1, 32, 37, 37, 36, 37, 37, 36, 36, 36, 37, 36, 37, 37, 36, 36, 36, 36, 33]
                         );
                     }
                 }
@@ -134,6 +136,7 @@ fn run_forking(
     stdin: &PipeReader,
     key: &i32,
     requestor_pipe: Option<Rc<PipeWriter>>,
+    data_for_mock: Vec<u16>
 ) {
     let (reader_for_parent, writer_for_parent) = os_pipe::pipe().unwrap();
     let (reader_for_child, writer_for_child) = os_pipe::pipe().unwrap();
@@ -199,6 +202,7 @@ fn run_forking(
                         input.max_cycles_input,
                         &writer_for_child,
                         &reader_for_parent,
+                        data_for_mock
                     )
                     .await;
                     let response = ExecuteResult {
@@ -248,6 +252,7 @@ async fn execute(
     max_cycles_input: Option<u64>,
     writer_for_child: &PipeWriter,
     reader_for_parent: &PipeReader,
+    data_for_mock: Vec<u16>
 ) -> Result<Vec<u8>, serde_error::Error> {
     let mut thread_execute: HashMap<Vec<u8>, Rc<PipeReader>> =
         HashMap::<Vec<u8>, Rc<PipeReader>>::new();
@@ -526,6 +531,8 @@ async fn execute(
     if let Some(m_cycle) = max_cycles_input {
         max_cycles = m_cycle;
     }
+    //let data_for_mock = vec![36, 37, 36, 34, 37, 37, 36, 37, 1, 32, 37, 37, 36, 37, 37, 36, 36, 36, 37, 36, 37, 37, 36, 36, 36, 36, 40, 33];
+    let mut machine_mock = CartesiMachineMock::new(data_for_mock);
     loop {
         let mut interpreter_break_reason: Option<cartesi_machine::BreakReason> = None;
         let time_before_read_iflags_y = SystemTime::now();
@@ -562,9 +569,9 @@ async fn execute(
         let data = machine.read_htif_tohost_data().unwrap();
         let reason = ((data >> 32) & M16) as u16;
         let length = data & M32; // length
-
+        let mock_reason = machine_mock.read_htif_tohost_data().unwrap();
         tracing::info!("got reason {} cmd {} data {}", reason, cmd, length);
-        match reason {
+        match mock_reason {
             SET_STATE_CID => {
                 let cid_raw = machine
                     .read_memory(PMA_CMIO_TX_BUFFER_START_DEF, length)
@@ -764,17 +771,21 @@ async fn execute(
                 write_message(&compute_writer, &execute_parameter_bytes).unwrap();
             }*/
             JOIN_COMPUTE => {
-                let cid_length = u64::from_be_bytes(
+                tracing::info!("JOIN_COMPUTE was called");
+
+                /*let cid_length = u64::from_be_bytes(
                     machine
                         .read_memory(PMA_CMIO_TX_BUFFER_START_DEF, 8)
                         .unwrap()
                         .try_into()
                         .unwrap(),
                 );
+                tracing::info!("JOIN_COMPUTE cid length {:?}", cid_length);
 
                 let cid_bytes = machine
                     .read_memory(PMA_CMIO_TX_BUFFER_START_DEF + 8, cid_length)
                     .unwrap();
+                tracing::info!("JOIN_COMPUTE cid {:?}", cid_bytes);
 
                 let payload_length = u64::from_be_bytes(
                     machine
@@ -783,6 +794,7 @@ async fn execute(
                         .try_into()
                         .unwrap(),
                 );
+                tracing::info!("JOIN_COMPUTE payload length {:?}", payload_length);
 
                 let payload = machine
                     .read_memory(
@@ -790,11 +802,19 @@ async fn execute(
                         payload_length,
                     )
                     .unwrap();
+                tracing::info!("JOIN_COMPUTE payload {:?}", payload);
 
                 let mut hasher = Sha256::new();
                 hasher.update(cid_bytes.clone());
-                hasher.update(payload.clone());
+                hasher.update(payload.clone());*/
+
+
+                let mut hasher = Sha256::new();
+                hasher.update(state_cid.to_bytes());
+                hasher.update(vec![]);
                 let spawn_hash = hasher.finalize().to_vec();
+                tracing::info!("JOIN_COMPUTE spawn_hash {:?}", spawn_hash);
+
                 let mut execute_result = None;
                 if let Some(reader) = thread_execute.remove(&spawn_hash) {
                     execute_result = Some(read_message(&reader));
@@ -807,16 +827,20 @@ async fn execute(
                     let execute_parameter = ExecuteParameters {
                         ipfs_url: ipfs_url.to_string(),
                         ipfs_write_url: ipfs_write_url.to_string(),
-                        payload: Some(payload),
-                        state_cid: cid_bytes,
+                        //payload: Some(payload),
+                        //state_cid: cid_bytes.clone(),
+                        payload: None,
+                        state_cid: state_cid.to_bytes(),
                         metadata,
                         max_cycles_input,
                         identifier: String::new(),
                     };
+                    tracing::info!("JOIN_COMPUTE writing execute parameters {:?}", execute_parameter);
                     let mut execute_parameter_bytes = Vec::new();
                     let data_json = serde_json::to_string(&execute_parameter).unwrap();
                     execute_parameter_bytes.extend(data_json.as_bytes().len().to_le_bytes());
                     execute_parameter_bytes.extend(data_json.as_bytes().to_vec());
+                    tracing::info!("JOIN_COMPUTE writing data {:?}", execute_parameter_bytes);
 
                     write_message(&writer_for_child, &execute_parameter_bytes).unwrap();
                     tracing::info!("JOIN_COMPUTE waiting for result");
@@ -832,6 +856,8 @@ async fn execute(
                         machine.send_cmio_response(1, &[]).unwrap();
                     }
                 }
+                return Ok(state_cid.to_bytes());
+
             }
             HINT => {
                 let hint = machine
@@ -1076,7 +1102,7 @@ where
     Ok(())
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ExecuteParameters {
     ipfs_url: String,
     ipfs_write_url: String,
@@ -1091,4 +1117,25 @@ pub struct ExecuteParameters {
 pub struct ExecuteResult {
     result: Result<Vec<u8>, serde_error::Error>,
     identifier: String,
+}
+
+pub struct CartesiMachineMock {
+    array: Vec<u16>,
+    index: usize,
+}
+
+impl CartesiMachineMock {
+    fn new(array: Vec<u16>) -> Self {
+        CartesiMachineMock { array, index: 0 }
+    }
+
+    fn read_htif_tohost_data(&mut self) -> Option<u16> {
+        if self.index < self.array.len() {
+            let result = self.array[self.index];
+            self.index += 1;
+            Some(result)
+        } else {
+            None
+        }
+    }
 }
