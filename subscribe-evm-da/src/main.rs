@@ -72,14 +72,17 @@ async fn main() {
         tracing::info!(" after second read");
         let time_after_execute = SystemTime::now();
         let subscribe_input = serde_json::from_slice::<SubscribeInput>(&parameter).unwrap();
-        subscribe_evm_da(
-            subscribe_input.height,
-            subscribe_input.opt,
-            &mut Cid::try_from(subscribe_input.current_cid).unwrap(),
-            subscribe_input.genesis_cid_text,
-            subscribe_input.chain_vm_id,
-        )
-        .await;
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            subscribe_evm_da(
+                subscribe_input.height,
+                subscribe_input.opt,
+                &mut Cid::try_from(subscribe_input.current_cid).unwrap(),
+                subscribe_input.genesis_cid_text,
+                subscribe_input.chain_vm_id,
+            )
+            .await;
+        });
     }
 }
 
