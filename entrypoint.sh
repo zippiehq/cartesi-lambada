@@ -50,6 +50,14 @@ if [ x$EVM_DA_URL = x ]; then
    EVM_DA_URL=http://127.0.0.1:8545
 fi
 
+if [ x$ETHEREUM_NODE_URL = x ]; then
+   ETHEREUM_NODE_URL=http://127.0.0.1:8545
+fi
+
+if [ x$CELESTIA_NODE_URL = x ]; then
+   CELESTIA_NODE_URL=http://127.0.0.1:26657
+fi
+
 mkdir -p /data/db
 mkdir -p /data/db/chains/
 mkdir -p /data/snapshot
@@ -64,11 +72,13 @@ if [ "$RUN_TESTS" = "true" ]; then
 	   --machine-dir=/data/base-machines/lambada-base-machine \
 	   --ipfs-url $IPFS_URL \
 	   --evm-da-url $EVM_DA_URL \
+       --ethereum-node-url $ETHEREUM_NODE_URL \
+       --celestia-node-url $CELESTIA_NODE_URL \
       --db-path /data/db/ 2>&1 > /tmp/lambada.log &
 
    sleep 240
       export SERVER_ADDRESS=http://127.0.0.1:3033
-   /bin/lambada_test --test-threads=1 --nocapture 
+   /bin/lambada_test --test-threads=1 --nocapture
 
 else
    LAMBADA_WORKER=/bin/lambada-worker RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --espresso-testnet-sequencer-url $ESPRESSO_TESTNET_SEQUENCER_URL \
@@ -77,5 +87,7 @@ else
 	   --machine-dir=/data/base-machines/lambada-base-machine \
 	   --ipfs-url $IPFS_URL \
 	   --evm-da-url $EVM_DA_URL \
+       --ethereum-node-url $ETHEREUM_NODE_URL \
+       --celestia-node-url $CELESTIA_NODE_URL \
       --db-path /data/db/  2>&1 > /tmp/lambada.log
 fi
