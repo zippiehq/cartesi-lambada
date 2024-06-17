@@ -150,6 +150,26 @@ ARG RELEASE=--release
 WORKDIR /build/subscribe-evm-da
 RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
 
+FROM build AS build-celestia-blocks-cache
+ARG RELEASE=--release
+COPY ./subscribe-celestia-blocks/Cargo.toml /build/subscribe-celestia-blocks/Cargo.toml
+COPY ./lambada/Cargo.toml /build/lambada/Cargo.toml
+COPY ./cartesi_lambda/Cargo.toml /build/cartesi_lambda/Cargo.toml
+RUN mkdir -p /build/cartesi_lambda/src && touch /build/cartesi_lambda/src/lib.rs
+RUN mkdir -p /build/lambada/src && touch /build/lambada/src
+RUN mkdir -p /build/subscribe-celestia-blocks/src && echo 'fn main() {}' > /build/subscribe-celestia-blocks/src/main.rs
+WORKDIR /build/subscribe-celestia-blocks
+RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
+
+FROM build-celestia-blocks-cache AS build-celestia-blocks
+COPY ./subscribe-celestia-blocks/src /build/subscribe-celestia-blocks/src
+COPY ./cartesi_lambda/src /build/cartesi_lambda/src
+COPY ./lambada/src /build/lambada/src
+RUN touch /build/subscribe-celestia-blocks/src/main.rs
+
+ARG RELEASE=--release
+WORKDIR /build/subscribe-celestia-blocks
+RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
 
 FROM debian:bookworm-20230725-slim AS image
 RUN apt-get update && DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends netcat-traditional curl ca-certificates
@@ -174,6 +194,7 @@ COPY --from=build-celestia /build/subscribe-celestia/target/$RELEASE_DIR/subscri
 COPY --from=build-avail /build/subscribe-avail/target/$RELEASE_DIR/subscribe-avail /bin/subscribe-avail
 COPY --from=build-evm-blocks /build/subscribe-evm-blocks/target/$RELEASE_DIR/subscribe-evm-blocks /bin/subscribe-evm-blocks
 COPY --from=build-evm-da /build/subscribe-evm-da/target/$RELEASE_DIR/subscribe-evm-da /bin/subscribe-evm-da
+COPY --from=build-celestia-blocks /build/subscribe-celestia-blocks/target/$RELEASE_DIR/subscribe-celestia-blocks /bin/subscribe-celestia-blocks
 COPY --from=build-lambada /build/lambada_test /bin/lambada_test
 COPY ./cartesi-build.sh /usr/bin/cartesi-build
 COPY ./wait-for-callback.pl /usr/bin/wait-for-callback.pl

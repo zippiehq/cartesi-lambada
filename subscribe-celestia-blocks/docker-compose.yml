@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  rust-app-ethereum-posting:
+    build:
+      context: .
+      dockerfile: Dockerfile-posting
+    environment:
+      - ETHEREUM_NODE_URL=http://anvil:8545
+      - CELESTIA_NODE_URL=http://celestia-node:26658
+      - DB_PATH=/data/db
+      - PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+      - AUTH_TOKEN=dummy
+    depends_on:
+      celestia-node:
+        condition: service_healthy
+      anvil:
+        condition: service_started
+    volumes:
+      - ./rust-app-ethereum-posting-data:/data/db
+    networks:
+      - blockchain-network
+
+  rust-app-subscriber:
+    build:
+      context: ../
+      dockerfile: Dockerfile
+    environment:
+      - ETHEREUM_NODE_URL=http://anvil:8545
+      - CELESTIA_NODE_URL=http://celestia-node:26658
+      - DB_PATH=/data/db
+    depends_on:
+      celestia-node:
+        condition: service_healthy
+      anvil:
+        condition: service_started
+    volumes:
+      - ./rust-app-subscriber-data:/data/db
+    networks:
+      - blockchain-network
+
+  celestia-node:
+    image: ghcr.io/celestiaorg/celestia-node:v0.13.7
+    command: "celestia light start --core.ip consensus.lunaroasis.net --p2p.network mocha --rpc.addr 0.0.0.0:26658 --rpc.skip-auth"
+    ports:
+      - "26657:26657"
+      - "26656:26656"
+      - "26658:26658"
+    environment:
+      - NODE_TYPE=light
+      - P2P_NETWORK=mocha
+      - MAX_HEADERS_PER_RANGE_REQUEST=10
+      - SAMPLE_AMOUNT=5
+      - SAMPLING_RANGE=10
+    healthcheck:
+      test: ["CMD", "nc", "localhost", "26658"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - blockchain-network
+
+  anvil:
+    build:
+      context: .
+      dockerfile: Dockerfile-anvil
+    command: ["anvil", "--host", "0.0.0.0"]
+    ports:
+      - "8545:8545"
+    networks:
+      - blockchain-network
+
+networks:
+  blockchain-network:
+    driver: bridge

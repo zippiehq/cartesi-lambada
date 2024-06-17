@@ -1,0 +1,11 @@
+FROM debian
+RUN apt-get update && apt-get install -y git curl bash
+RUN curl -L https://foundry.paradigm.xyz | bash \
+    && bash -c 'source $HOME/.profile && foundryup'
+RUN mv $HOME/.foundry/bin/* /usr/local/bin/ \
+    && useradd -m foundry
+
+USER foundry
+WORKDIR /home/foundry
+EXPOSE 8545
+CMD ["anvil"]
