@@ -3,6 +3,7 @@ use alloy_sol_types::{sol, SolCall};
 use async_compatibility_layer::logging::{setup_backtrace, setup_logging};
 use async_std::stream::StreamExt;
 use async_std::task;
+use cartesi_machine::errors::MachineError;
 use cartesi_machine::{configuration::RuntimeConfig, Machine};
 use cid::Cid;
 use futures::TryStreamExt;
@@ -27,6 +28,7 @@ use std::io::Write;
 use std::os::fd::{AsFd, AsRawFd};
 use std::path::Path;
 use std::rc::Rc;
+use std::str::FromStr;
 use std::time::Duration;
 use std::{thread, time::SystemTime};
 const HTIF_YIELD_MANUAL_REASON_RX_ACCEPTED_DEF: u16 = 0x1;
@@ -66,8 +68,10 @@ fn main() {
             .add(&stdin.as_fd(), Event::readable(key.clone() as usize))
             .unwrap()
     };
-    let mut children_hash_map: HashMap<usize, (Pid, Rc<PipeReader>, Option<Rc<PipeWriter>>, Rc<PipeWriter>)> =
-        HashMap::new();
+    let mut children_hash_map: HashMap<
+        usize,
+        (Pid, Rc<PipeReader>, Option<Rc<PipeWriter>>, Rc<PipeWriter>),
+    > = HashMap::new();
     let mut events = Events::new();
     loop {
         events.clear();
@@ -87,7 +91,7 @@ fn main() {
                         &stdin,
                         key,
                         None,
-                        vec![36, 37, 36, 34, 37, 37, 36, 37, 1, 32, 37, 40, 1]
+                        true,
                     );
                 }
             } else if children_hash_map.contains_key(&ev.key) {
@@ -98,7 +102,6 @@ fn main() {
                         serde_json::from_slice::<ExecuteResult>(&execute_output)
                     {
                         tracing::info!("Sending Execute result");
-
                         if let Some(output_pipe) = child.1 .2 {
                             write_message(&output_pipe, &execute_result).unwrap();
                             drop(output_pipe);
@@ -112,7 +115,6 @@ fn main() {
                         serde_json::from_slice::<ExecuteParameters>(&execute_output)
                     {
                         tracing::info!("JOIN_COMPUTE Forking");
-
                         run_forking(
                             execute_output,
                             &mut children_hash_map,
@@ -120,9 +122,11 @@ fn main() {
                             &stdin,
                             key,
                             Some(child.1 .3),
-                            vec![36, 37, 36, 34, 37, 37, 36, 37, 1, 32, 37, 37, 36, 37, 37, 36, 36, 36, 37, 36, 37, 37, 36, 36, 36, 36, 33]
+                            false,
                         );
                     }
+                } else {
+                    panic!("no output {:?}", child);
                 }
             }
         }
@@ -131,21 +135,29 @@ fn main() {
 
 fn run_forking(
     parameter: Vec<u8>,
-    children_hash_map: &mut HashMap<usize, (Pid, Rc<PipeReader>, Option<Rc<PipeWriter>>, Rc<PipeWriter>)>,
+    children_hash_map: &mut HashMap<
+        usize,
+        (Pid, Rc<PipeReader>, Option<Rc<PipeWriter>>, Rc<PipeWriter>),
+    >,
     poller: &Poller,
     stdin: &PipeReader,
     key: &i32,
     requestor_pipe: Option<Rc<PipeWriter>>,
-    data_for_mock: Vec<u16>
+    mock: bool,
 ) {
     let (reader_for_parent, writer_for_parent) = os_pipe::pipe().unwrap();
     let (reader_for_child, writer_for_child) = os_pipe::pipe().unwrap();
+    unsafe {
+        poller
+            .add(
+                &reader_for_child.as_fd(),
+                Event::readable(reader_for_child.as_fd().as_raw_fd() as usize),
+            )
+            .unwrap();
+    }
     let execute_parameter = serde_json::from_slice::<ExecuteParameters>(&parameter).unwrap();
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child, .. }) => {
-            drop(reader_for_parent);
-            drop(writer_for_child);
-
             write_message(&writer_for_parent, &execute_parameter).unwrap();
 
             let reader_for_child = Rc::new(reader_for_child);
@@ -153,23 +165,19 @@ fn run_forking(
 
             children_hash_map.insert(
                 reader_for_child.clone().as_fd().as_raw_fd() as usize,
-                (child, reader_for_child.clone(), requestor_pipe, child_writer),
+                (
+                    child,
+                    reader_for_child.clone(),
+                    requestor_pipe.clone(),
+                    child_writer,
+                ),
             );
-
-            unsafe {
-                poller
-                    .add(
-                        &reader_for_child.as_fd(),
-                        Event::readable(reader_for_child.as_raw_fd() as usize),
-                    )
-                    .unwrap();
-            }
+            tracing::info!("children_hash_map {:?}", children_hash_map);
             poller
                 .modify(&stdin.as_fd(), Event::readable(key.clone() as usize))
                 .unwrap();
         }
         Ok(ForkResult::Child) => {
-            drop(reader_for_child);
             let random_number = rand::random::<u64>();
             let my_stdout = File::create(format!("/tmp/{}-stdout.log", random_number))
                 .expect("Failed to create stdout file");
@@ -202,7 +210,7 @@ fn run_forking(
                         input.max_cycles_input,
                         &writer_for_child,
                         &reader_for_parent,
-                        data_for_mock
+                        mock,
                     )
                     .await;
                     let response = ExecuteResult {
@@ -212,11 +220,11 @@ fn run_forking(
                     write_message(&writer_for_child, &response).unwrap();
                 });
             }
-            drop(reader_for_parent);
             std::process::exit(0);
         }
         Err(_) => {}
     }
+    tracing::info!("children_hash_map {:?}", children_hash_map);
 }
 
 fn encode_evm_advance(payload: Vec<u8>) -> Vec<u8> {
@@ -252,7 +260,7 @@ async fn execute(
     max_cycles_input: Option<u64>,
     writer_for_child: &PipeWriter,
     reader_for_parent: &PipeReader,
-    data_for_mock: Vec<u16>
+    mock: bool,
 ) -> Result<Vec<u8>, serde_error::Error> {
     let mut thread_execute: HashMap<Vec<u8>, Rc<PipeReader>> =
         HashMap::<Vec<u8>, Rc<PipeReader>>::new();
@@ -358,7 +366,7 @@ async fn execute(
 
     tracing::info!("execute");
 
-    let mut machine: Option<Machine> = None;
+    let mut machine: Option<MachineEnum> = None;
 
     // The current state of the machine (0 = base image loaded, base image initialized (LOAD_APP), 1 = app initialized (LOAD_TX), 2 = processing a tx (should end in FINISH/EXCEPTION))
     let mut machine_loaded_state = 0;
@@ -392,21 +400,27 @@ async fn execute(
             Cid::try_from(app_cid.clone()).unwrap().to_string()
         );
         let before_load_machine = SystemTime::now();
-        machine = Some(
-            Machine::load(
-                std::path::Path::new(&format!(
-                    "/data/snapshot/{}_{}",
-                    base_image,
-                    Cid::try_from(app_cid.clone()).unwrap().to_string()
-                )),
-                RuntimeConfig {
-                    skip_root_hash_check: true,
-                    skip_root_hash_store: true,
-                    ..Default::default()
-                },
-            )
-            .unwrap(),
-        );
+        if mock {
+            tracing::info!("machine is mock");
+            machine = Some(MachineEnum::Mock(CartesiMachineMock::new()));
+        } else {
+            tracing::info!("machine is cartesi machine");
+            machine = Some(MachineEnum::Regular(
+                Machine::load(
+                    std::path::Path::new(&format!(
+                        "/data/snapshot/{}_{}",
+                        base_image,
+                        Cid::try_from(app_cid.clone()).unwrap().to_string()
+                    )),
+                    RuntimeConfig {
+                        skip_root_hash_check: true,
+                        skip_root_hash_store: true,
+                        ..Default::default()
+                    },
+                )
+                .unwrap(),
+            ));
+        }
         let after_load_machine = SystemTime::now();
         tracing::info!(
             "It took {} milliseconds to load snapshot",
@@ -425,17 +439,25 @@ async fn execute(
             thread::sleep(std::time::Duration::from_millis(500));
         }
         let before_load_machine = SystemTime::now();
-        machine = Some(
-            Machine::load(
-                std::path::Path::new(&format!("/data/snapshot/{}_get_app", base_image).as_str()),
-                RuntimeConfig {
-                    skip_root_hash_check: true,
-                    skip_root_hash_store: true,
-                    ..Default::default()
-                },
-            )
-            .unwrap(),
-        );
+        if mock {
+            tracing::info!("machine is mock");
+            machine = Some(MachineEnum::Mock(CartesiMachineMock::new()));
+        } else {
+            tracing::info!("machine is cartesi machine");
+            machine = Some(MachineEnum::Regular(
+                Machine::load(
+                    std::path::Path::new(
+                        &format!("/data/snapshot/{}_get_app", base_image).as_str(),
+                    ),
+                    RuntimeConfig {
+                        skip_root_hash_check: true,
+                        skip_root_hash_store: true,
+                        ..Default::default()
+                    },
+                )
+                .unwrap(),
+            ));
+        }
         let after_load_machine = SystemTime::now();
         tracing::info!(
             "It took {} milliseconds to load snapshot",
@@ -453,17 +475,23 @@ async fn execute(
             thread::sleep(std::time::Duration::from_millis(500));
         }
         let before_load_machine = SystemTime::now();
-        machine = Some(
-            Machine::load(
-                std::path::Path::new(&format!("/data/snapshot/{}", base_image).as_str()),
-                RuntimeConfig {
-                    skip_root_hash_check: true,
-                    skip_root_hash_store: true,
-                    ..Default::default()
-                },
-            )
-            .unwrap(),
-        );
+        if mock {
+            tracing::info!("machine is mock");
+            machine = Some(MachineEnum::Mock(CartesiMachineMock::new()));
+        } else {
+            tracing::info!("machine is cartesi machine");
+            machine = Some(MachineEnum::Regular(
+                Machine::load(
+                    std::path::Path::new(&format!("/data/snapshot/{}", base_image).as_str()),
+                    RuntimeConfig {
+                        skip_root_hash_check: true,
+                        skip_root_hash_store: true,
+                        ..Default::default()
+                    },
+                )
+                .unwrap(),
+            ));
+        }
         let after_load_machine = SystemTime::now();
         tracing::info!(
             "It took {} milliseconds to load snapshot",
@@ -503,17 +531,23 @@ async fn execute(
             let before_load_machine = SystemTime::now();
             // XXX we should really do root hash check at least on downloaded stuff that we've been pointed to?
             // maybe a compute_with_callback flag that we can trust the machine? but need to be careful about derived snapshots then too?
-            machine = Some(
-                Machine::load(
-                    std::path::Path::new(&format!("/data/snapshot/{}", base_image)),
-                    RuntimeConfig {
-                        skip_root_hash_check: true,
-                        skip_root_hash_store: true,
-                        ..Default::default()
-                    },
-                )
-                .unwrap(),
-            );
+            if mock {
+                tracing::info!("machine is mock");
+                machine = Some(MachineEnum::Mock(CartesiMachineMock::new()));
+            } else {
+                tracing::info!("machine is cartesi machine");
+                machine = Some(MachineEnum::Regular(
+                    Machine::load(
+                        std::path::Path::new(&format!("/data/snapshot/{}", base_image).as_str()),
+                        RuntimeConfig {
+                            skip_root_hash_check: true,
+                            skip_root_hash_store: true,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap(),
+                ));
+            }
             let after_load_machine = SystemTime::now();
             tracing::info!(
                 "It took {} milliseconds to load snapshot",
@@ -531,8 +565,6 @@ async fn execute(
     if let Some(m_cycle) = max_cycles_input {
         max_cycles = m_cycle;
     }
-    //let data_for_mock = vec![36, 37, 36, 34, 37, 37, 36, 37, 1, 32, 37, 37, 36, 37, 37, 36, 36, 36, 37, 36, 37, 37, 36, 36, 36, 36, 40, 33];
-    let mut machine_mock = CartesiMachineMock::new(data_for_mock);
     loop {
         let mut interpreter_break_reason: Option<cartesi_machine::BreakReason> = None;
         let time_before_read_iflags_y = SystemTime::now();
@@ -569,9 +601,9 @@ async fn execute(
         let data = machine.read_htif_tohost_data().unwrap();
         let reason = ((data >> 32) & M16) as u16;
         let length = data & M32; // length
-        let mock_reason = machine_mock.read_htif_tohost_data().unwrap();
         tracing::info!("got reason {} cmd {} data {}", reason, cmd, length);
-        match mock_reason {
+
+        match reason {
             SET_STATE_CID => {
                 let cid_raw = machine
                     .read_memory(PMA_CMIO_TX_BUFFER_START_DEF, length)
@@ -580,6 +612,7 @@ async fn execute(
                 tracing::info!("SET_STATE_CID, ending succesfully");
                 drop(machine);
                 tracing::info!("SET_STATE_CID received cid {}", cid);
+                tracing::info!("SET_STATE_CID received data {}", data);
                 return Ok(cid.to_bytes());
             }
             HTIF_YIELD_MANUAL_REASON_RX_ACCEPTED_DEF => {
@@ -613,13 +646,11 @@ async fn execute(
                             Ok(ForkResult::Parent { child, .. }) => {}
                             Ok(ForkResult::Child) => {
                                 let _ = setsid().unwrap();
-                                machine
-                                    .store(Path::new(&format!(
-                                        "/data/snapshot/{}_{}",
-                                        base_image,
-                                        app_cid.clone().to_string(),
-                                    )))
-                                    .unwrap();
+                                machine.store(Path::new(&format!(
+                                    "/data/snapshot/{}_{}",
+                                    base_image,
+                                    app_cid.clone().to_string(),
+                                ))).unwrap();
                                 std::fs::remove_file(format!(
                                     "/data/snapshot/{}_{}.lock",
                                     base_image,
@@ -643,16 +674,12 @@ async fn execute(
                 let payload = payload.clone().unwrap_or_default();
                 let encoded = encode_evm_advance(payload);
                 tracing::info!("evm encoded {}", hex::encode(encoded.clone()));
-                machine
-                    .send_cmio_response(HTIF_YIELD_REASON_ADVANCE_STATE_DEF, &encoded)
-                    .unwrap();
+                machine.send_cmio_response(HTIF_YIELD_REASON_ADVANCE_STATE_DEF, &encoded).unwrap();
                 tracing::info!("evm advance was written");
             }
             CURRENT_STATE_CID => {
                 tracing::info!("CURRENT_STATE_CID");
-                machine
-                    .send_cmio_response(0, &state_cid.to_bytes().clone())
-                    .unwrap();
+                machine.send_cmio_response(0, &state_cid.to_bytes().clone()).unwrap();
                 tracing::info!("current state info was written");
             }
             EXTERNALIZE_STATE => {
@@ -729,9 +756,7 @@ async fn execute(
                 let metadata_result = metadata.get(&metadata_key).unwrap(); // handle this a bit better
                 tracing::info!("metadata len {:?}", metadata_result.len());
                 let time_before_writing_metadata = SystemTime::now();
-                machine
-                    .send_cmio_response(0, &metadata_result.clone())
-                    .unwrap();
+                machine.send_cmio_response(0, &metadata_result.clone()).unwrap();
                 tracing::info!("metadata info was written");
             }
             /*SPAWN_COMPUTE => {
@@ -773,7 +798,7 @@ async fn execute(
             JOIN_COMPUTE => {
                 tracing::info!("JOIN_COMPUTE was called");
 
-                /*let cid_length = u64::from_be_bytes(
+                let cid_length = u64::from_be_bytes(
                     machine
                         .read_memory(PMA_CMIO_TX_BUFFER_START_DEF, 8)
                         .unwrap()
@@ -806,12 +831,7 @@ async fn execute(
 
                 let mut hasher = Sha256::new();
                 hasher.update(cid_bytes.clone());
-                hasher.update(payload.clone());*/
-
-
-                let mut hasher = Sha256::new();
-                hasher.update(state_cid.to_bytes());
-                hasher.update(vec![]);
+                hasher.update(payload.clone());
                 let spawn_hash = hasher.finalize().to_vec();
                 tracing::info!("JOIN_COMPUTE spawn_hash {:?}", spawn_hash);
 
@@ -820,49 +840,49 @@ async fn execute(
                     execute_result = Some(read_message(&reader));
                     tracing::info!("JOIN_COMPUTE execute result {:?}", execute_result);
                 } else {
-                    let mut metadata: HashMap<String, String> = HashMap::<String, String>::new();
+                    let mut metadata: HashMap<Vec<u8>, Vec<u8>> =
+                        HashMap::<Vec<u8>, Vec<u8>>::new();
 
-                    metadata.insert(String::from("sequencer"), String::from("spawn"));
+                    metadata.insert(
+                        calculate_sha256("sequencer".as_bytes()),
+                        calculate_sha256("spawn".as_bytes()),
+                    );
 
                     let execute_parameter = ExecuteParameters {
                         ipfs_url: ipfs_url.to_string(),
                         ipfs_write_url: ipfs_write_url.to_string(),
-                        //payload: Some(payload),
-                        //state_cid: cid_bytes.clone(),
-                        payload: None,
-                        state_cid: state_cid.to_bytes(),
-                        metadata,
+                        payload: Some(payload),
+                        state_cid: cid_bytes.clone(),
+                        metadata: metadata
+                            .iter()
+                            .map(|(k, v)| (hex::encode(&k), hex::encode(&v)))
+                            .collect::<HashMap<String, String>>(),
                         max_cycles_input,
                         identifier: String::new(),
                     };
-                    tracing::info!("JOIN_COMPUTE writing execute parameters {:?}", execute_parameter);
-                    let mut execute_parameter_bytes = Vec::new();
-                    let data_json = serde_json::to_string(&execute_parameter).unwrap();
-                    execute_parameter_bytes.extend(data_json.as_bytes().len().to_le_bytes());
-                    execute_parameter_bytes.extend(data_json.as_bytes().to_vec());
-                    tracing::info!("JOIN_COMPUTE writing data {:?}", execute_parameter_bytes);
+                    tracing::info!(
+                        "JOIN_COMPUTE writing execute parameters {:?}",
+                        execute_parameter
+                    );
+                    tracing::info!("JOIN_COMPUTE writing data {:?}", execute_parameter);
 
-                    write_message(&writer_for_child, &execute_parameter_bytes).unwrap();
+                    write_message(&writer_for_child, &execute_parameter).unwrap();
                     tracing::info!("JOIN_COMPUTE waiting for result");
-                    let execute_result = read_message(&reader_for_parent);
+                    let execute_result = read_message(&reader_for_parent).unwrap();
                     tracing::info!("JOIN_COMPUTE result {:?}", execute_result);
                 }
 
-                match execute_result.unwrap() {
+                /*                 match execute_result.unwrap() {
                     Ok(cid) => {
-                        machine.send_cmio_response(0, &cid).unwrap();
+                        machine.send_cmio_response(0, &cid);
                     }
                     Err(_) => {
-                        machine.send_cmio_response(1, &[]).unwrap();
+                        machine.send_cmio_response(1, &[]);
                     }
-                }
-                return Ok(state_cid.to_bytes());
-
+                }*/
             }
             HINT => {
-                let hint = machine
-                    .read_memory(PMA_CMIO_TX_BUFFER_START_DEF, length)
-                    .unwrap();
+                let hint = machine.read_memory(PMA_CMIO_TX_BUFFER_START_DEF, length).unwrap();
 
                 let hint_str = String::from_utf8(hint).unwrap();
                 if hint_str == "get_app" {
@@ -886,12 +906,10 @@ async fn execute(
                                 Ok(ForkResult::Parent { child, .. }) => {}
                                 Ok(ForkResult::Child) => {
                                     let _ = setsid().unwrap();
-                                    machine
-                                        .store(Path::new(&format!(
-                                            "/data/snapshot/{}_get_app",
-                                            base_image
-                                        )))
-                                        .unwrap();
+                                    machine.store(Path::new(&format!(
+                                        "/data/snapshot/{}_get_app",
+                                        base_image
+                                    ))).unwrap();
                                     std::fs::remove_file(format!(
                                         "/data/snapshot/{}_get_app.lock",
                                         base_image
@@ -967,7 +985,7 @@ async fn execute(
         }
         let time_before_resetting_iflags_y = SystemTime::now();
         // After handling the operation, we clear the yield flag and loop back and continue execution of machine
-        machine.reset_iflags_y().unwrap();
+        machine.reset_iflags_y();
         let time_after_resetting_iflags_y = SystemTime::now();
         if measure_execution_time {
             tracing::info!(
@@ -1113,29 +1131,124 @@ pub struct ExecuteParameters {
     identifier: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ExecuteResult {
     result: Result<Vec<u8>, serde_error::Error>,
     identifier: String,
 }
 
 pub struct CartesiMachineMock {
-    array: Vec<u16>,
+    array: Vec<u64>,
+    read_responses: Vec<Vec<u8>>,
     index: usize,
+    responses_index: usize,
 }
 
 impl CartesiMachineMock {
-    fn new(array: Vec<u16>) -> Self {
-        CartesiMachineMock { array, index: 0 }
+    fn read_htif_tohost_data(&mut self) -> Result<u64, MachineError> {
+        let result = self.array[self.index];
+        self.index += 1;
+        Ok(result)
+    }
+    fn read_iflags_y(&mut self) -> Result<bool, MachineError> {
+        Ok(true)
     }
 
-    fn read_htif_tohost_data(&mut self) -> Option<u16> {
-        if self.index < self.array.len() {
-            let result = self.array[self.index];
-            self.index += 1;
-            Some(result)
-        } else {
-            None
+    fn read_memory(&mut self, address: u64, length: u64) -> Result<Vec<u8>, MachineError> {
+        let result = self.read_responses[self.responses_index].clone();
+        self.responses_index += 1;
+        Ok(result)
+    }
+    fn send_cmio_response(&mut self, reason: u16, data: &[u8]) -> Result<(), MachineError>{
+        Ok(())
+    }
+
+    fn store(&mut self, path: &Path) -> Result<(), MachineError> {
+        Ok(())
+    }
+    fn reset_iflags_y(&mut self) -> Result<(), MachineError> {
+        Ok(())
+    }
+    fn read_htif_tohost_cmd(&mut self) -> Result<u64, MachineError> {
+        Ok(1)
+    }
+}
+impl CartesiMachineMock {
+    fn new() -> Self {
+        CartesiMachineMock {
+            array: vec![171798691840, 141733920804],
+            index: 0,
+            read_responses: vec![
+                vec![0, 0, 0, 0, 0, 0, 0, 0],
+                Cid::from_str("bafybeicdhhtwmgpnt7jugvlv3xtp2u4w4mkunpmg6txkkkjhpvnt2buyqa")
+                    .unwrap()
+                    .to_bytes(),
+                vec![0, 0, 0, 0, 0, 0, 0, 0],
+                vec![],
+                Cid::from_str("bafybeiayjruyctdk6thwhy67ke7hjgjtwsnaoas3ekj2gapqlwt63khxle")
+                    .unwrap()
+                    .to_bytes(),
+            ],
+            responses_index: 0,
+        }
+    }
+}
+
+enum MachineEnum {
+    Mock(CartesiMachineMock),
+    Regular(Machine),
+}
+
+impl MachineEnum {
+    fn read_htif_tohost_data(&mut self) -> Result<u64, MachineError> {
+        match self {
+            MachineEnum::Mock(mock) => mock.read_htif_tohost_data(),
+            MachineEnum::Regular(machine) => machine.read_htif_tohost_data(),
+        }
+    }
+    fn read_iflags_y(&mut self) -> Result<bool, MachineError> {
+        match self {
+            MachineEnum::Mock(mock) => mock.read_iflags_y(),
+            MachineEnum::Regular(machine) => machine.read_iflags_y(),
+        }
+    }
+    fn read_memory(&mut self, address: u64, length: u64) -> Result<Vec<u8>, MachineError> {
+        match self {
+            MachineEnum::Mock(mock) => mock.read_memory(address, length),
+            MachineEnum::Regular(machine) => machine.read_memory(address, length),
+        }
+    }
+    fn send_cmio_response(&mut self, reason: u16, data: &[u8]) -> Result<(), MachineError>{
+        match self {
+            MachineEnum::Mock(mock) => mock.send_cmio_response(reason, data),
+            MachineEnum::Regular(machine) => machine.send_cmio_response(reason, data),
+        }
+    }
+    fn store(&mut self, path: &Path) -> Result<(), MachineError> {
+        match self {
+            MachineEnum::Mock(mock) => mock.store(path),
+            MachineEnum::Regular(machine) => machine.store(path),
+        }
+    }
+
+    fn reset_iflags_y(&mut self) -> Result<(), MachineError> {
+        match self {
+            MachineEnum::Mock(machine) => {machine.reset_iflags_y()}
+            MachineEnum::Regular(machine) => machine.reset_iflags_y(),
+        }
+    }
+
+    fn read_htif_tohost_cmd(&mut self) -> Result<u64, MachineError> {
+        match self {
+            MachineEnum::Mock(mock) => mock.read_htif_tohost_cmd(),
+            MachineEnum::Regular(machine) => machine.read_htif_tohost_cmd(),
+        }
+    }
+
+    fn run(&mut self, mcycle_end: u64) -> Result<cartesi_machine::BreakReason, MachineError> {
+        match self {
+            MachineEnum::Mock(mock) => Ok(cartesi_machine::BreakReason::YieldedManually),
+            MachineEnum::Regular(machine) => machine.run(mcycle_end),
         }
     }
 }
