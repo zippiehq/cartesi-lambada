@@ -29,7 +29,9 @@ use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 use structopt::StructOpt;
-use subxt::{config::Header as XtHeader, utils::H256};
+//use subxt::{config::Header as XtHeader, utils::H256};
+use avail_subxt::api::data_availability::calls::types::SubmitData;
+use avail_subxt::primitives::CheckAppId;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ExecutorOptions {
     pub espresso_testnet_sequencer_url: String,
@@ -133,36 +135,45 @@ pub async fn subscribe_avail(
             // We've not processed this block before, so let's process it (can we even end here since we set starting point?)
             if state == State::Done {
                 let extrinsics = block.extrinsics().await.unwrap();
-                let extrinsics = extrinsics.iter().collect::<Vec<_>>();
+                let da_submissions = extrinsics.find::<SubmitData>();
+                for da_submission in da_submissions {
+                    let da_submission = da_submission.unwrap();
 
-                for ext in extrinsics.iter() {
-                    let extrinsic_bytes = ext.as_ref().unwrap().bytes();
-                    tracing::info!("extrinsic_bytes len {:?}", extrinsics.len());
+                    let tx_data = da_submission.value.data.0.as_slice();
 
-                    tracing::info!("extrinsic_bytes {:?}", extrinsic_bytes);
-                    let mut tx_metadata = metadata.clone();
+                    let app_id = da_submission
+                        .details
+                        .signed_extensions()
+                        .unwrap()
+                        .find::<CheckAppId>()
+                        .unwrap()
+                        .unwrap();
 
-                    tx_metadata.insert(
-                        calculate_sha256("avail-tx-count".as_bytes()),
-                        avail_tx_count.to_be_bytes().to_vec(),
-                    );
-                    tx_metadata.insert(
-                        calculate_sha256("avail-tx-namespace".as_bytes()),
-                        avail_tx_namespace.clone(),
-                    );
+                    if app_id == parity_scale_codec::Compact(chain_vm_id_num.try_into().unwrap()) {
+                        let mut tx_metadata = metadata.clone();
 
-                    handle_tx(
-                        opt.clone(),
-                        Some(extrinsic_bytes.to_vec()),
-                        current_cid,
-                        tx_metadata,
-                        current_height,
-                        genesis_cid_text.clone(),
-                        hex::encode(block_hash),
-                    )
-                    .await;
+                        tx_metadata.insert(
+                            calculate_sha256("avail-tx-count".as_bytes()),
+                            avail_tx_count.to_be_bytes().to_vec(),
+                        );
+                        tx_metadata.insert(
+                            calculate_sha256("avail-tx-namespace".as_bytes()),
+                            avail_tx_namespace.clone(),
+                        );
 
-                    avail_tx_count += 1;
+                        handle_tx(
+                            opt.clone(),
+                            Some(tx_data.to_vec()),
+                            current_cid,
+                            tx_metadata,
+                            current_height,
+                            genesis_cid_text.clone(),
+                            hex::encode(block_hash),
+                        )
+                        .await;
+
+                        avail_tx_count += 1;
+                    }
                 }
             }
         }
