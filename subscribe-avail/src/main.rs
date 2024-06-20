@@ -101,15 +101,22 @@ pub async fn subscribe_avail(
     let client = AvailClient::new(&opt.avail_testnet_sequencer_url)
         .await
         .unwrap();
-
+    let mut current_height = if current_height == 0 {
+        1
+    } else {
+        current_height
+    };
     let chain_vm_id_num: u64 = chain_vm_id.parse::<u64>().expect("VM ID as u64");
     let avail_tx_namespace = chain_vm_id_num.to_be_bytes().to_vec();
     let mut avail_tx_count: u64 = 0;
 
-    let mut best_stream = client.blocks().subscribe_finalized().await.unwrap();
-    while let Some(block) = best_stream.next().await {
-        let block = block.unwrap();
-
+    while let Some(block_hash) = client
+        .legacy_rpc()
+        .chain_get_block_hash(Some(current_height.into()))
+        .await
+        .unwrap()
+    {
+        let mut block = client.blocks().at(block_hash).await.unwrap();
         let block_number = block.header().number;
         let connection = sqlite::Connection::open_thread_safe(format!(
             "{}/chains/{}",
@@ -150,6 +157,11 @@ pub async fn subscribe_avail(
                         .unwrap();
 
                     if app_id == parity_scale_codec::Compact(chain_vm_id_num.try_into().unwrap()) {
+                        tracing::info!(
+                            "app_id {:?}, tx_data.to_vec() {:?}",
+                            app_id,
+                            tx_data.to_vec()
+                        );
                         let mut tx_metadata = metadata.clone();
 
                         tx_metadata.insert(
@@ -195,6 +207,7 @@ pub async fn subscribe_avail(
                 .await;
             });
         });
+        current_height = current_height + 1
     }
 }
 
