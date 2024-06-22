@@ -30,6 +30,12 @@ pub struct Options {
 
     #[clap(long, env = "AUTOMATIC_SUBSCRIBE", default_value = "")]
     pub automatic_subscribe: String,
+
+    #[clap(long, env = "CELESTIA_NODE_URL")]
+    pub celestia_node_url: String,
+
+    #[clap(long, env = "ETHEREUM_NODE_URL")]
+    pub ethereum_node_url: String,
 }
 
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};

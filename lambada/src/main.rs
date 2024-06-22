@@ -41,6 +41,8 @@ async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid, server_addre
         db_path: options.db_path.clone(),
         server_address,
         evm_da_url: options.evm_da_url.clone(),
+        celestia_node_url: options.celestia_node_url.clone(),
+        ethereum_node_url: options.ethereum_node_url.clone(),
     };
 
     tracing::info!("Subscribing to appchain {:?}", cid.to_string());

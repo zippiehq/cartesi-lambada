@@ -1,0 +1,15 @@
+[package]
+name = "subscribe-celestia-blocks"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ethers = "2.0.14"
+celestia-rpc = {git = "https://github.com/eigerco/lumina"}
+celestia-types = { git = "https://github.com/eigerco/lumina" }
+tokio = { version = "1", features = ["full"] }
+dotenv = "0.15.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sqlite = "0.32.0"
+hex = "0.4"

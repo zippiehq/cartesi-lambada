@@ -22,6 +22,8 @@ pub struct ExecutorOptions {
     pub db_path: String,
     pub server_address: String,
     pub evm_da_url: String,
+    pub celestia_node_url: String,
+    pub ethereum_node_url: String,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -189,6 +191,9 @@ pub async fn subscribe(opt: ExecutorOptions, appchain: Cid) {
             }
             "evm-blocks" => {
                 subscribe_path = String::from("/bin/subscribe-evm-blocks");
+            }
+            "celestia-blocks" => {
+                subscribe_path = String::from("/bin/subscribe-celestia-blocks");
             }
             _ => tracing::info!("Unknown sequencer type: {}", r#type),
         }
