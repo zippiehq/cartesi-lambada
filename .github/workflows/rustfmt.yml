@@ -19,3 +19,28 @@ jobs:
         rustup component add rustfmt 
     - name: Check formatting
       run: cargo fmt -- --check
+
+    - name: Check formatting in subscribe-avail directory
+      run: |
+        cd subscribe-avail
+        cargo fmt -- --check
+
+    - name: Check formatting in subscribe-celestia directory
+      run: |
+        cd subscribe-celestia
+        cargo fmt -- --check
+
+    - name: Check formatting in subscribe-espresso directory
+      run: |
+        cd subscribe-espresso
+        cargo fmt -- --check
+
+    - name: Check formatting in subscribe-evm-blocks directory
+      run: |
+        cd subscribe-evm-blocks
+        cargo fmt -- --check
+        
+    - name: Check formatting in subscribe-evm-da directory
+      run: |
+        cd subscribe-evm-da
+        cargo fmt -- --check
