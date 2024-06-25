@@ -26,9 +26,11 @@ fi
   IPFS_URL=http://127.0.0.1:5001
 
   IPFS_PATH=/data/ipfs ipfs add --cid-version=1 -r /sample
-  for x in /data/dev-machine/*.car; do
-	IPFS_PATH=/data/ipfs ipfs dag import $x
-  done
+  if [ -e /data/dev-machine ]; then
+	  for x in /data/dev-machine/*.car; do
+		IPFS_PATH=/data/ipfs ipfs dag import $x
+	  done
+  fi
   (zcat /lambada-base-machine.car.gz | IPFS_PATH=/data/ipfs ipfs dag import &> $LAMBADA_LOGS_DIR/ipfs-base.log) &
 fi
 
