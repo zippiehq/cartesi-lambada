@@ -4,9 +4,13 @@ if [ x$NO_SSH = x ]; then
 	/usr/sbin/sshd -D -e &
 fi
 
+if [ -z "$LAMBADA_LOGS_DIR" ]; then
+  LAMBADA_LOGS_DIR=/tmp
+fi
+
 bash /entrypoint-lambada.sh &
 
-code-server --bind-addr 0.0.0.0:8081 --disable-telemetry --disable-getting-started-override 2>&1 &> /tmp/code-server.log &
+code-server --bind-addr 0.0.0.0:8081 --disable-telemetry --disable-getting-started-override 2>&1 &> $LAMBADA_LOGS_DIR/code-server.log &
 containerd 2>&1 &> /dev/null & 
 buildkitd --oci-worker=true 2>&1 &> /dev/null &
 

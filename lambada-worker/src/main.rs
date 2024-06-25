@@ -50,8 +50,10 @@ const PMA_CMIO_TX_BUFFER_LOG2_SIZE_DEF: u64 = 21;
 const HTIF_YIELD_REASON_ADVANCE_STATE_DEF: u16 = 0;
 
 fn main() {
-    let my_stderr =
-        File::create("/tmp/lambada-worker-stderr.log").expect("Failed to create stderr file");
+    let log_directory_path: String =
+        std::env::var("LAMBADA_LOGS_DIR").unwrap_or_else(|_| String::from("/tmp"));
+    let my_stderr = File::create(format!("{}/lambada-worker-stderr.log", log_directory_path))
+        .expect("Failed to create stderr file");
     let stderr_fd = my_stderr.as_raw_fd();
     unsafe {
         libc::close(2);
@@ -178,10 +180,18 @@ fn run_forking(
         Ok(ForkResult::Child) => {
             drop(reader_for_child);
             let random_number = rand::random::<u64>();
-            let my_stdout = File::create(format!("/tmp/{}-stdout.log", random_number))
-                .expect("Failed to create stdout file");
-            let my_stderr = File::create(format!("/tmp/{}-stderr.log", random_number))
-                .expect("Failed to create stderr file");
+            let log_directory_path: String =
+                std::env::var("LAMBADA_LOGS_DIR").unwrap_or_else(|_| String::from("/tmp"));
+            let my_stdout = File::create(format!(
+                "{}/{}-stdout.log",
+                log_directory_path, random_number
+            ))
+            .expect("Failed to create stdout file");
+            let my_stderr = File::create(format!(
+                "{}/{}-stderr.log",
+                log_directory_path, random_number
+            ))
+            .expect("Failed to create stderr file");
             let stdout_fd = my_stdout.as_raw_fd();
             let stderr_fd = my_stderr.as_raw_fd();
             unsafe {

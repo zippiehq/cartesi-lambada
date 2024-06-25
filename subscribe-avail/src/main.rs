@@ -59,11 +59,18 @@ pub struct BincodedCompute {
 #[async_std::main]
 async fn main() {
     let chain_cid = &env::args().collect::<Vec<_>>()[1];
-
-    let my_stdout = File::create(format!("/tmp/{}-avail-stdout.log", chain_cid))
-        .expect("Failed to create stdout file");
-    let my_stderr = File::create(format!("/tmp/{}-avail-stderr.log", chain_cid))
-        .expect("Failed to create stderr file");
+    let log_directory_path: String =
+        std::env::var("LAMBADA_LOGS_DIR").unwrap_or_else(|_| String::from("/tmp"));
+    let my_stdout = File::create(format!(
+        "{}/{}-avail-stdout.log",
+        log_directory_path, chain_cid
+    ))
+    .expect("Failed to create stdout file");
+    let my_stderr = File::create(format!(
+        "{}/{}-avail-stderr.log",
+        log_directory_path, chain_cid
+    ))
+    .expect("Failed to create stderr file");
     let stdout_fd = my_stdout.as_raw_fd();
     let stderr_fd = my_stderr.as_raw_fd();
     unsafe {

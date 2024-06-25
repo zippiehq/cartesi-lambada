@@ -54,12 +54,16 @@ ipfs files cp /ipfs/$APP_CID $CHAIN_DIR/gov/app
 
 CHAIN_CID=`ipfs files stat --hash $CHAIN_DIR`
 
+if [ -z "$LAMBADA_LOGS_DIR" ]; then
+  LAMBADA_LOGS_DIR=/tmp
+fi
+
 echo "CHAIN CID: $CHAIN_CID"
 DATE=`date`
 echo "$DATE - Testing if the container succesfully initializes and requests a transaction when in a Cartesi Machine .."
 curl -d 'no' -X POST -H "Content-Type: application/octet-stream" "http://localhost:3033/compute_with_callback/$CHAIN_CID?callback=http://localhost:9800/post&only_warmup=true" &> /dev/null
 echo "Tailing cartesi machine log:"
-tail -f /tmp/cartesi-machine.log &
+tail -f $LAMBADA_LOGS_DIR/cartesi-machine.log &
 TAIL_PID=$!
 perl /usr/bin/wait-for-callback.pl
 sleep 1
