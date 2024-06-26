@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  celestia-node:
+    image: runonflux/celestia-node:latest
+    environment:
+      - NODE_TYPE=light
+      - NETWORK=mocha
+      - CELESTIA_NODE_URL=http://celestia-node:26657
+    ports:
+      - "26657:26657"
+    networks:
+      - blockchain-network
+
+  ethereum-node:
+    image: ethereum/client-go:latest
+    command: ["--dev"]
+    ports:
+      - "8545:8545"
+    networks:
+      - blockchain-network
+
+networks:
+  blockchain-network:
+    driver: bridge
+
