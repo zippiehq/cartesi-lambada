@@ -1,0 +1,13 @@
+FROM rust:latest
+RUN apt-get update && apt-get install -y \
+    protobuf-compiler \
+    curl \
+    git \
+    build-essential
+
+WORKDIR /app
+COPY Cargo.toml ./
+RUN mkdir src
+COPY src ./src
+RUN cargo clean && cargo build --release
+CMD ["./target/release/subscribe-celestia-blocks"]

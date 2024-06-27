@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  rust-app:
+    build:
+      context: .
+      dockerfile: Dockerfile-rust
+    environment:
+      - ETHEREUM_NODE_URL=http://anvil:8545
+      - CELESTIA_NODE_URL=http://celestia-node:26657
+    depends_on:
+      - celestia-node
+      - anvil
+    networks:
+      - blockchain-network
+
+  celestia-node:
+    build:
+      context: .
+      dockerfile: Dockerfile-celestia
+    command: ["celestia", "light", "start", "--core.ip", "consensus.lunaroasis.net", "--keyring.accname", "cel-name-my"]
+    ports:
+      - "26657:26657"
+    networks:
+      - blockchain-network
+
+  anvil:
+    build:
+      context: .
+      dockerfile: Dockerfile-anvil
+    command: ["anvil", "--host", "0.0.0.0"]
+    ports:
+      - "8545:8545"
+    networks:
+      - blockchain-network
+
+networks:
+  blockchain-network:
+    driver: bridge
