@@ -1,6 +1,6 @@
 FROM runonflux/celestia-node:latest
 RUN mkdir -p /home/celestia/.celestia-bridge
-RUN chown -R nobody:nogroup /home/celestia/.celestia-bridge
-RUN chmod 755 /home/celestia/.celestia-bridge
+
 WORKDIR /home/celestia
+
 CMD ["celestia", "light", "start", "--core.ip", "consensus.lunaroasis.net", "--keyring.accname", "cel-name-my"]

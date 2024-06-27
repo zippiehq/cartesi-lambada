@@ -18,6 +18,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile-celestia
+    volumes:
+      - ./config:/home/celestia/.celestia-bridge
     command: ["celestia", "light", "start", "--core.ip", "consensus.lunaroasis.net", "--keyring.accname", "cel-name-my"]
     ports:
       - "26657:26657"
