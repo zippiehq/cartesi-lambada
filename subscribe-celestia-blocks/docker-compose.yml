@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile-rust
     environment:
       - ETHEREUM_NODE_URL=http://anvil:8545
-      - CELESTIA_NODE_URL=http://celestia-node:26657
+      - CELESTIA_NODE_URL=http://celestia-node:26658
     depends_on:
       - celestia-node
       - anvil
@@ -22,7 +22,7 @@ services:
       - ./config:/home/celestia/.celestia-bridge
     command: ["celestia", "light", "start", "--core.ip", "consensus.lunaroasis.net", "--keyring.accname", "cel-name-my"]
     ports:
-      - "26657:26657"
+      - "26658:26658"
     networks:
       - blockchain-network
 

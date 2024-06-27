@@ -1,5 +1,6 @@
 FROM runonflux/celestia-node:latest
-RUN mkdir -p /home/celestia/.celestia-bridge
+RUN mkdir -p /home/celestia/.celestia-bridge && \
+    chmod +x /home/celestia/.celestia-bridge
 
 WORKDIR /home/celestia
 
