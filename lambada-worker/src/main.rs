@@ -15,15 +15,14 @@ use nix::unistd::{fork, setsid, ForkResult, Pid};
 use os_pipe::{dup_stdin, dup_stdout};
 use os_pipe::{PipeReader, PipeWriter};
 use polling::{Event, Events, Poller};
+use rand::{distributions::Alphanumeric, Rng};
 use rs_car_ipfs::single_file::read_single_file_seek;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use sha3::{Digest, Sha3_256};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Cursor;
-use std::io::Read;
-use std::io::Write;
+use std::io::{Cursor, Read, Write};
 use std::os::fd::{AsFd, AsRawFd};
 use std::path::Path;
 use std::rc::Rc;
@@ -144,14 +143,11 @@ fn run_forking(
 ) {
     let (reader_for_parent, writer_for_parent) = os_pipe::pipe().unwrap();
     let (reader_for_child, writer_for_child) = os_pipe::pipe().unwrap();
-    let execute_parameter = serde_json::from_slice::<ExecuteParameters>(&parameter).unwrap();
+    let input = serde_json::from_slice::<ExecuteParameters>(&parameter).unwrap();
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child, .. }) => {
             drop(reader_for_parent);
             drop(writer_for_child);
-
-            write_message(&writer_for_parent, &execute_parameter).unwrap();
-
             let reader_for_child = Rc::new(reader_for_child);
             let child_writer = Rc::new(writer_for_parent);
 
@@ -179,17 +175,16 @@ fn run_forking(
         }
         Ok(ForkResult::Child) => {
             drop(reader_for_child);
-            let random_number = rand::random::<u64>();
             let log_directory_path: String =
                 std::env::var("LAMBADA_LOGS_DIR").unwrap_or_else(|_| String::from("/tmp"));
             let my_stdout = File::create(format!(
                 "{}/{}-stdout.log",
-                log_directory_path, random_number
+                log_directory_path, input.identifier
             ))
             .expect("Failed to create stdout file");
             let my_stderr = File::create(format!(
                 "{}/{}-stderr.log",
-                log_directory_path, random_number
+                log_directory_path, input.identifier
             ))
             .expect("Failed to create stderr file");
             let stdout_fd = my_stdout.as_raw_fd();
@@ -200,34 +195,30 @@ fn run_forking(
                 libc::dup2(stdout_fd, 1);
                 libc::dup2(stderr_fd, 2);
             }
-            if let Ok(parent_input) = read_message(&reader_for_parent) {
-                let input = serde_json::from_slice::<ExecuteParameters>(&parent_input).unwrap();
-
-                task::block_on(async {
-                    setup_logging();
-                    setup_backtrace();
-                    let result = execute(
-                        input.ipfs_url.as_str(),
-                        input.ipfs_write_url.as_str(),
-                        input.payload,
-                        Cid::try_from(input.state_cid).unwrap(),
-                        input
-                            .metadata
-                            .iter()
-                            .map(|(k, v)| (hex::decode(&k).unwrap(), hex::decode(&v).unwrap()))
-                            .collect::<HashMap<Vec<u8>, Vec<u8>>>(),
-                        input.max_cycles_input,
-                        &writer_for_child,
-                        &reader_for_parent,
-                    )
-                    .await;
-                    let response = ExecuteResult {
-                        identifier: input.identifier,
-                        result,
-                    };
-                    write_message(&writer_for_child, &response).unwrap();
-                });
-            }
+            task::block_on(async {
+                setup_logging();
+                setup_backtrace();
+                let result = execute(
+                    input.ipfs_url.as_str(),
+                    input.ipfs_write_url.as_str(),
+                    input.payload,
+                    Cid::try_from(input.state_cid).unwrap(),
+                    input
+                        .metadata
+                        .iter()
+                        .map(|(k, v)| (hex::decode(&k).unwrap(), hex::decode(&v).unwrap()))
+                        .collect::<HashMap<Vec<u8>, Vec<u8>>>(),
+                    input.max_cycles_input,
+                    &writer_for_child,
+                    &reader_for_parent,
+                )
+                .await;
+                let response = ExecuteResult {
+                    identifier: input.identifier,
+                    result,
+                };
+                write_message(&writer_for_child, &response).unwrap();
+            });
             drop(reader_for_parent);
             std::process::exit(0);
         }
@@ -831,7 +822,11 @@ async fn execute(
                         state_cid: cid_bytes,
                         metadata,
                         max_cycles_input,
-                        identifier: String::new(),
+                        identifier: rand::thread_rng()
+                            .sample_iter(&Alphanumeric)
+                            .take(10)
+                            .map(char::from)
+                            .collect(),
                     };
                     let mut execute_parameter_bytes = Vec::new();
                     let data_json = serde_json::to_string(&execute_parameter).unwrap();

@@ -249,6 +249,8 @@ async fn request_handler(
                 ))
             {
                 let mut bincoded = false;
+                let mut identifier: Option<String> = None;
+
                 for query in parsed_query {
                     match query.0.as_str() {
                         "bincoded" => match query.1.parse::<bool>() {
@@ -267,6 +269,9 @@ async fn request_handler(
                                     .unwrap();
                             }
                         },
+                        "identifier" => {
+                            identifier = Some(query.1.clone());
+                        }
                         _ => {}
                     };
                 }
@@ -295,7 +300,7 @@ async fn request_handler(
                     cid.to_string(),
                     None,
                     metadata,
-                    None,
+                    identifier,
                 )
                 .await
                 {
