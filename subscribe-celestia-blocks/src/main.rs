@@ -32,7 +32,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         eprintln!("CELESTIA_NODE_URL must be set in the environment");
         std::process::exit(1);
     });
-    let db_path = env::var("DB_PATH")?;
+    let db_path = env::var("DB_PATH").unwrap_or_else(|_| {
+        eprintln!("DB_PATH must be set in the environment");
+        std::process::exit(1);});
 
     let celestia_client = CelestiaClient::new(&celestia_node_url, None).await?;
     let (starting_block, target_address, starting_celestia_height) =
