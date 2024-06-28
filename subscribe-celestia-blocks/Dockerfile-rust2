@@ -1,0 +1,17 @@
+FROM cartesi-lambada:1.0
+RUN apt-get update && apt-get install -y \
+    protobuf-compiler \
+    curl \
+    build-essential \
+    libssl-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+ENV PROTOC=/usr/bin/protoc
+ENV RUST_BACKTRACE=1
+WORKDIR /app
+COPY ./Cargo.toml ./
+COPY src ./src
+RUN cargo build  # Omits the --release flag for a debug build
+CMD ["./target/debug/subscribe-celestia-blocks"]

@@ -1,10 +1,23 @@
 version: '3.8'
 
 services:
-  rust-app:
+  rust-app1:
     build:
       context: .
-      dockerfile: Dockerfile-rust
+      dockerfile: Dockerfile-rust1
+    environment:
+      - ETHEREUM_NODE_URL=http://anvil:8545
+      - CELESTIA_NODE_URL=http://celestia-node:26658
+    depends_on:
+      - celestia-node
+      - anvil
+    networks:
+      - blockchain-network
+
+  rust-app2:
+    build:
+      context: .
+      dockerfile: Dockerfile-rust2
     environment:
       - ETHEREUM_NODE_URL=http://anvil:8545
       - CELESTIA_NODE_URL=http://celestia-node:26658
