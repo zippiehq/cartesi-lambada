@@ -13,9 +13,10 @@ services:
       - celestia-node
       - anvil
     volumes:
-      - ./rust-app1-data:/data
+      - ./rust-app1-data:/data/db
     networks:
       - blockchain-network
+    command: ["tail", "-f", "/dev/null"]
 
   rust-app2:
     build:
@@ -29,9 +30,10 @@ services:
       - celestia-node
       - anvil
     volumes:
-      - ./rust-app2-data:/data
+      - ./rust-app2-data:/data/db
     networks:
       - blockchain-network
+    command: ["tail", "-f", "/dev/null"]
 
   celestia-node:
     build:
