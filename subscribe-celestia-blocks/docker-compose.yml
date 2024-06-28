@@ -8,9 +8,12 @@ services:
     environment:
       - ETHEREUM_NODE_URL=http://anvil:8545
       - CELESTIA_NODE_URL=http://celestia-node:26658
+      - DB_PATH=/data/db
     depends_on:
       - celestia-node
       - anvil
+    volumes:
+      - ./rust-app1-data:/data
     networks:
       - blockchain-network
 
@@ -21,9 +24,12 @@ services:
     environment:
       - ETHEREUM_NODE_URL=http://anvil:8545
       - CELESTIA_NODE_URL=http://celestia-node:26658
+      - DB_PATH=/data/db
     depends_on:
       - celestia-node
       - anvil
+    volumes:
+      - ./rust-app2-data:/data
     networks:
       - blockchain-network
 

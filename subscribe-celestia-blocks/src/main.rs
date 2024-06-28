@@ -24,8 +24,14 @@ struct DecodedTx {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenv::dotenv().ok();
-    let ethereum_node_url = env::var("ETHEREUM_NODE_URL")?;
-    let celestia_node_url = env::var("CELESTIA_NODE_URL")?;
+    let ethereum_node_url = std::env::var("ETHEREUM_NODE_URL").unwrap_or_else(|_| {
+        eprintln!("ETHEREUM_NODE_URL must be set in the environment");
+        std::process::exit(1);
+    });
+    let celestia_node_url = std::env::var("CELESTIA_NODE_URL").unwrap_or_else(|_| {
+        eprintln!("CELESTIA_NODE_URL must be set in the environment");
+        std::process::exit(1);
+    });
     let db_path = env::var("DB_PATH")?;
 
     let celestia_client = CelestiaClient::new(&celestia_node_url, None).await?;
