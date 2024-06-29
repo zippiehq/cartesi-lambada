@@ -4,7 +4,7 @@ services:
   rust-app1:
     build:
       context: .
-      dockerfile: Dockerfile-rust1
+      dockerfile: Dockerfile-posting
     environment:
       - ETHEREUM_NODE_URL=http://anvil:8545
       - CELESTIA_NODE_URL=http://celestia-node:26658
@@ -21,7 +21,7 @@ services:
   rust-app2:
     build:
       context: .
-      dockerfile: Dockerfile-rust2
+      dockerfile: Dockerfile-subscriber
     environment:
       - ETHEREUM_NODE_URL=http://anvil:8545
       - CELESTIA_NODE_URL=http://celestia-node:26658
