@@ -24,18 +24,9 @@ struct DecodedTx {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
    // let _ = dotenv::dotenv();
-    let ethereum_node_url = std::env::var("ETHEREUM_NODE_URL").unwrap_or_else(|_| {
-        eprintln!("ETHEREUM_NODE_URL missing");
-        String::default()
-    });
-    let celestia_node_url = std::env::var("CELESTIA_NODE_URL").unwrap_or_else(|_| {
-        eprintln!("CELESTIA_NODE_URL missing");
-        String::default()
-    });
-    let db_path = env::var("DB_PATH").unwrap_or_else(|_| {
-        eprintln!("DB_PATH missing");
-        String::default()
-    });
+    let ethereum_node_url = std::env::var("ETHEREUM_NODE_URL").expect("ETHEREUM_NODE_URL missing");
+    let celestia_node_url = std::env::var("CELESTIA_NODE_URL").expect("CELESTIA_NODE_URL missing");
+    let db_path = env::var("DB_PATH").expect("DB_PATH missing");
 
     let celestia_client = CelestiaClient::new(&celestia_node_url, None).await?;
     let (starting_block, target_address, starting_celestia_height) =

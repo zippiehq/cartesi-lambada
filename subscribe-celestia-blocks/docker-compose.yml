@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  rust-app1:
+  rust-app-ethereum-posting:
     build:
       context: .
       dockerfile: Dockerfile-posting
@@ -9,16 +9,18 @@ services:
       - ETHEREUM_NODE_URL=http://anvil:8545
       - CELESTIA_NODE_URL=http://celestia-node:26658
       - DB_PATH=/data/db
+      - PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+      - AUTH_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJBbGxvdyI6WyJwdWJsaWMiLCJyZWFkIiwid3JpdGUiLCJhZG1pbiJdfQ.MXa4Ob6SyjJWJSH3S2u98SbOtFsSWQO7B_oKweJuKNU
     depends_on:
       - celestia-node
       - anvil
     volumes:
-      - ./rust-app1-data:/data/db
+      - ./rust-app-ethereum-posting-data:/data/db
     networks:
       - blockchain-network
-    command: ["tail", "-f", "/dev/null"]
+    command: ["./target/release/celestia-example"]
 
-  rust-app2:
+  rust-app-subscriber:
     build:
       context: .
       dockerfile: Dockerfile-subscriber
@@ -30,19 +32,21 @@ services:
       - celestia-node
       - anvil
     volumes:
-      - ./rust-app2-data:/data/db
+      - ./rust-app-subscriber-data:/data/db
     networks:
       - blockchain-network
-    command: ["tail", "-f", "/dev/null"]
+    command: ["./target/release/subscribe-celestia-blocks"]
 
   celestia-node:
     build:
       context: .
       dockerfile: Dockerfile-celestia
     volumes:
-      - ./config:/home/celestia/.celestia-bridge
+      - ./data/celestia-node:/home/celestia/.celestia-bridge
     command: ["celestia", "light", "start", "--core.ip", "consensus.lunaroasis.net", "--keyring.accname", "cel-name-my"]
     ports:
+      - "26657:26657"
+      - "26656:26656"
       - "26658:26658"
     networks:
       - blockchain-network

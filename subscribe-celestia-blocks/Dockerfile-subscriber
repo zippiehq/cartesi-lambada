@@ -2,8 +2,14 @@
 FROM rust:latest
 
 RUN apt-get update && apt-get install -y \
+    build-essential \
+    protobuf-compiler \
+    curl \
+    git \
+    cmake \
     pkg-config \
-    libssl-dev
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/subscribe-celestia-blocks
 
@@ -17,7 +23,7 @@ RUN cargo build --release
 RUN rm -f ./target/release/deps/subscribe-celestia-blocks*
 RUN rm src/*.rs
 COPY ./src ./src
-
+RUN cargo clean
 RUN cargo build --release
 
 CMD ["./target/release/subscribe-celestia-blocks"]
