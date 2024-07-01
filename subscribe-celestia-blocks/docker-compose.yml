@@ -41,6 +41,12 @@ services:
     image: ghcr.io/celestiaorg/celestia-node:v0.13.7
     volumes:
       - ./data/celestia-node:/home/celestia/
+    environment:
+      - NODE_TYPE=light
+      - P2P_NETWORK=mocha
+      - MAX_HEADERS_PER_RANGE_REQUEST=10
+      - SAMPLE_AMOUNT=5
+      - SAMPLING_RANGE=10
     command: ["celestia", "light", "start", "--core.ip", "consensus.lunaroasis.net", "--p2p.network", "mocha"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:26657/health"]
@@ -52,7 +58,8 @@ services:
       - "26657:26657"
       - "26656:26656"
       - "26658:26658"
-    network_mode: host
+    networks:
+      - blockchain-network
 
   anvil:
     build:
