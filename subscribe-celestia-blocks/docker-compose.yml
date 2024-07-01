@@ -43,7 +43,9 @@ services:
       dockerfile: Dockerfile-celestia
     volumes:
       - ./data/celestia-node:/home/celestia/.celestia-bridge
-    command: ["celestia", "light", "start", "--core.ip", "consensus.lunaroasis.net", "--keyring.accname", "cel-name-my"]
+      - ./data/celestia-node:/home/celestia/.celestia-light
+      - ./data/celestia-node:/home/celestia/config.toml
+    command: ["tail", "-f", "/dev/null"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:26657/health"]
       interval: 30s
