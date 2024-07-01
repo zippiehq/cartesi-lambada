@@ -1,7 +1,0 @@
-FROM ghcr.io/celestiaorg/celestia-node:v0.13.7
-
-RUN mkdir -p /home/celestia/.celestia-bridge /home/celestia/.celestia-light && \
-    chmod +x /home/celestia
-
-WORKDIR /home/celestia
-CMD ["celestia", "light", "start", "--core.ip", "consensus.lunaroasis.net", "--keyring.accname", "cel-name-my"]

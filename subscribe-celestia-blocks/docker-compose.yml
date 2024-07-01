@@ -38,14 +38,10 @@ services:
     command: ["./target/release/subscribe-celestia-blocks"]
 
   celestia-node:
-    build:
-      context: .
-      dockerfile: Dockerfile-celestia
+    image: ghcr.io/celestiaorg/celestia-node:v0.13.7
     volumes:
-      - ./data/celestia-node:/home/celestia/.celestia-bridge
-      - ./data/celestia-node:/home/celestia/.celestia-light
-      - ./data/celestia-node:/home/celestia/config.toml
-    command: ["tail", "-f", "/dev/null"]
+      - ./data/celestia-node:/home/celestia/
+    command: ["celestia", "light", "start", "--core.ip", "consensus.lunaroasis.net", "--p2p.network", "mocha"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:26657/health"]
       interval: 30s
