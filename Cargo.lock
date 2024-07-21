@@ -3508,6 +3508,8 @@ dependencies = [
  "hyper-tls",
  "ipfs-api-backend-hyper",
  "jf-merkle-tree",
+ "nix",
+ "os_pipe",
  "rand 0.8.5",
  "sequential-test",
  "serde",

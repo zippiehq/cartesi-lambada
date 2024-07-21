@@ -20,6 +20,7 @@ COPY ./cartesi_lambda/Cargo.toml /build/cartesi_lambda/Cargo.toml
 COPY ./lambada/Cargo.toml /build/lambada/Cargo.toml
 COPY ./lambada-worker/Cargo.toml /build/lambada-worker/Cargo.toml
 RUN mkdir -p /build/cartesi_lambda/src && touch /build/cartesi_lambda/src/lib.rs
+RUN mkdir -p /build/lambada/src && touch /build/lambada/src
 RUN mkdir -p /build/lambada/src && echo 'fn main() {}' > /build/lambada/src/main.rs
 RUN mkdir -p /build/lambada-worker/src &&  echo 'fn main() { panic!("bad build"); }' > /build/lambada-worker/src/main.rs
 
@@ -35,7 +36,7 @@ RUN rm -rf /build/cartesi_lambda/src /build/lambada/src /build/lambada-worker/sr
 COPY ./cartesi_lambda/src /build/cartesi_lambda/src
 COPY ./lambada/src /build/lambada/src
 COPY ./lambada-worker/src /build/lambada-worker/src
-RUN touch /build/cartesi_lambda/src/lib.rs /build/lambada/src/main.rs /build/lambada-worker/src/main.rs
+RUN touch /build/cartesi_lambda/src/lib.rs /build/lambada/src/main.rs /build/lambada/src/lib.rs /build/lambada-worker/src/main.rs
 ARG RELEASE=--release
 RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
 
@@ -47,12 +48,18 @@ RUN PATH=~/.cargo/bin:$PATH cargo rustc --release --test lambada_test  -- --emit
 FROM build AS build-espresso-cache
 ARG RELEASE=--release
 COPY ./subscribe-espresso/Cargo.toml /build/subscribe-espresso/Cargo.toml
+COPY ./lambada/Cargo.toml /build/lambada/Cargo.toml
+COPY ./cartesi_lambda/Cargo.toml /build/cartesi_lambda/Cargo.toml
+RUN mkdir -p /build/cartesi_lambda/src && touch /build/cartesi_lambda/src/lib.rs
+RUN mkdir -p /build/lambada/src && touch /build/lambada/src
 RUN mkdir -p /build/subscribe-espresso/src && echo 'fn main() {}' > /build/subscribe-espresso/src/main.rs
 WORKDIR /build/subscribe-espresso
 RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
 
 FROM build-espresso-cache AS build-espresso
 COPY ./subscribe-espresso/src /build/subscribe-espresso/src
+COPY ./cartesi_lambda/src /build/cartesi_lambda/src
+COPY ./lambada/src /build/lambada/src
 RUN touch /build/subscribe-espresso/src/main.rs
 
 ARG RELEASE=--release
@@ -62,12 +69,18 @@ RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
 FROM build AS build-celestia-cache
 ARG RELEASE=--release
 COPY ./subscribe-celestia/Cargo.toml /build/subscribe-celestia/Cargo.toml
+COPY ./lambada/Cargo.toml /build/lambada/Cargo.toml
+COPY ./cartesi_lambda/Cargo.toml /build/cartesi_lambda/Cargo.toml
+RUN mkdir -p /build/cartesi_lambda/src && touch /build/cartesi_lambda/src/lib.rs
+RUN mkdir -p /build/lambada/src && touch /build/lambada/src
 RUN mkdir -p /build/subscribe-celestia/src && echo 'fn main() {}' > /build/subscribe-celestia/src/main.rs
 WORKDIR /build/subscribe-celestia
 RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
 
 FROM build-celestia-cache AS build-celestia
 COPY ./subscribe-celestia/src /build/subscribe-celestia/src
+COPY ./cartesi_lambda/src /build/cartesi_lambda/src
+COPY ./lambada/src /build/lambada/src
 RUN touch /build/subscribe-celestia/src/main.rs
 
 ARG RELEASE=--release
@@ -77,12 +90,18 @@ RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
 FROM build AS build-avail-cache
 ARG RELEASE=--release
 COPY ./subscribe-avail/Cargo.toml /build/subscribe-avail/Cargo.toml
+COPY ./lambada/Cargo.toml /build/lambada/Cargo.toml
+COPY ./cartesi_lambda/Cargo.toml /build/cartesi_lambda/Cargo.toml
+RUN mkdir -p /build/cartesi_lambda/src && touch /build/cartesi_lambda/src/lib.rs
+RUN mkdir -p /build/lambada/src && touch /build/lambada/src
 RUN mkdir -p /build/subscribe-avail/src && echo 'fn main() {}' > /build/subscribe-avail/src/main.rs
 WORKDIR /build/subscribe-avail
 RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
 
 FROM build-avail-cache AS build-avail
 COPY ./subscribe-avail/src /build/subscribe-avail/src
+COPY ./cartesi_lambda/src /build/cartesi_lambda/src
+COPY ./lambada/src /build/lambada/src
 RUN touch /build/subscribe-avail/src/main.rs
 
 ARG RELEASE=--release
@@ -92,12 +111,18 @@ RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
 FROM build AS build-evm-blocks-cache
 ARG RELEASE=--release
 COPY ./subscribe-evm-blocks/Cargo.toml /build/subscribe-evm-blocks/Cargo.toml
+COPY ./lambada/Cargo.toml /build/lambada/Cargo.toml
+COPY ./cartesi_lambda/Cargo.toml /build/cartesi_lambda/Cargo.toml
+RUN mkdir -p /build/cartesi_lambda/src && touch /build/cartesi_lambda/src/lib.rs
+RUN mkdir -p /build/lambada/src && touch /build/lambada/src
 RUN mkdir -p /build/subscribe-evm-blocks/src && echo 'fn main() {}' > /build/subscribe-evm-blocks/src/main.rs
 WORKDIR /build/subscribe-evm-blocks
 RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
 
 FROM build-evm-blocks-cache AS build-evm-blocks
 COPY ./subscribe-evm-blocks/src /build/subscribe-evm-blocks/src
+COPY ./cartesi_lambda/src /build/cartesi_lambda/src
+COPY ./lambada/src /build/lambada/src
 RUN touch /build/subscribe-evm-blocks/src/main.rs
 
 ARG RELEASE=--release
@@ -107,12 +132,18 @@ RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
 FROM build AS build-evm-da-cache
 ARG RELEASE=--release
 COPY ./subscribe-evm-da/Cargo.toml /build/subscribe-evm-da/Cargo.toml
+COPY ./lambada/Cargo.toml /build/lambada/Cargo.toml
+COPY ./cartesi_lambda/Cargo.toml /build/cartesi_lambda/Cargo.toml
+RUN mkdir -p /build/cartesi_lambda/src && touch /build/cartesi_lambda/src/lib.rs
+RUN mkdir -p /build/lambada/src && touch /build/lambada/src
 RUN mkdir -p /build/subscribe-evm-da/src && echo 'fn main() {}' > /build/subscribe-evm-da/src/main.rs
 WORKDIR /build/subscribe-evm-da
 RUN PATH=~/.cargo/bin:$PATH cargo build $RELEASE
 
 FROM build-evm-da-cache AS build-evm-da
 COPY ./subscribe-evm-da/src /build/subscribe-evm-da/src
+COPY ./cartesi_lambda/src /build/cartesi_lambda/src
+COPY ./lambada/src /build/lambada/src
 RUN touch /build/subscribe-evm-da/src/main.rs
 
 ARG RELEASE=--release

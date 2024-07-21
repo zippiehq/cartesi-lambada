@@ -6,6 +6,8 @@ use celestia_types::nmt::Namespace;
 use cid::Cid;
 use hyper::Uri;
 use hyper::{header, Body, Client, Method, Request};
+use lambada::setup_subscriber;
+use lambada::{ExecutorOptions, SubscribeInput};
 use nix::libc;
 use os_pipe::PipeReader;
 use os_pipe::{dup_stdin, dup_stdout};
@@ -25,25 +27,7 @@ use std::{
     sync::{Arc, Mutex},
     time::SystemTime,
 };
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ExecutorOptions {
-    pub espresso_testnet_sequencer_url: String,
-    pub celestia_testnet_sequencer_url: String,
-    pub avail_testnet_sequencer_url: String,
-    pub ipfs_url: String,
-    pub ipfs_write_url: String,
-    pub db_path: String,
-    pub server_address: String,
-    pub evm_da_url: String,
-}
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-pub struct SubscribeInput {
-    pub height: u64,
-    pub opt: ExecutorOptions,
-    pub current_cid: Vec<u8>,
-    pub chain_vm_id: String,
-    pub genesis_cid_text: String,
-}
+
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct BincodedCompute {
     pub metadata: HashMap<Vec<u8>, Vec<u8>>,
@@ -51,39 +35,10 @@ pub struct BincodedCompute {
 }
 #[async_std::main]
 async fn main() {
-    let chain_cid = &env::args().collect::<Vec<_>>()[1];
-    let log_directory_path: String =
-        std::env::var("LAMBADA_LOGS_DIR").unwrap_or_else(|_| String::from("/tmp"));
-    let my_stdout = File::create(format!(
-        "{}/{}-celestia-stdout.log",
-        log_directory_path, chain_cid
-    ))
-    .expect("Failed to create stdout file");
-    let my_stderr = File::create(format!(
-        "{}/{}-celestia-stderr.log",
-        log_directory_path, chain_cid
-    ))
-    .expect("Failed to create stderr file");
-
-    let stdout_fd = my_stdout.as_raw_fd();
-    let stderr_fd = my_stderr.as_raw_fd();
-    unsafe {
-        libc::close(1);
-        libc::close(2);
-        libc::dup2(stdout_fd, 1);
-        libc::dup2(stderr_fd, 2);
-    }
-    setup_logging();
-    setup_backtrace();
-    let stdin = dup_stdin().unwrap();
-
-    if let Ok(parameter) = read_message(&stdin) {
-        tracing::info!(" after second read");
-        let time_after_execute = SystemTime::now();
-        let subscribe_input = serde_json::from_slice::<SubscribeInput>(&parameter).unwrap();
+    if let Some((subscribe_input, chain_cid)) = setup_subscriber("celestia") {
         subscribe_celestia(
             subscribe_input.height,
-            Cid::from_str(chain_cid).unwrap().to_bytes(),
+            Cid::from_str(&chain_cid).unwrap().to_bytes(),
             subscribe_input.opt,
             &mut Cid::try_from(subscribe_input.current_cid).unwrap(),
             subscribe_input.chain_vm_id,

@@ -22,3 +22,4 @@ serde_json = "1.0.107"
 os_pipe = {version = "1.1.5", features = ["io_safety"]}
 nix = { version = "0.28.0", features = ["process"] }
 async-compatibility-layer = { git = "https://github.com/EspressoSystems/async-compatibility-layer", tag = "1.4.1", features = ["logging-utils"] }
+lambada = {path = "../lambada"}
