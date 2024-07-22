@@ -33,3 +33,4 @@ cid = "0.11.0"
 bincode = "1.3.3"
 sqlite = "0.32.0"
 parity-scale-codec = "3.6.12"
+lambada = {path = "../lambada"}

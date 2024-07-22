@@ -1,5 +1,7 @@
 use sha3::{Digest, Sha3_256};
 
+use crate::ExecutorOptions;
+use crate::SubscribeInput;
 use cid::{Cid, CidGeneric};
 use futures_util::TryStreamExt;
 use hyper::Request;
@@ -9,29 +11,8 @@ use sqlite::State;
 use std::collections::HashMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 pub const MACHINE_IO_ADDRESSS: u64 = 0x80000000000000;
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ExecutorOptions {
-    pub espresso_testnet_sequencer_url: String,
-    pub celestia_testnet_sequencer_url: String,
-    pub avail_testnet_sequencer_url: String,
-    pub ipfs_url: String,
-    pub ipfs_write_url: String,
-    pub db_path: String,
-    pub server_address: String,
-    pub evm_da_url: String,
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-pub struct SubscribeInput {
-    pub height: u64,
-    pub opt: ExecutorOptions,
-    pub current_cid: Vec<u8>,
-    pub chain_vm_id: String,
-    pub genesis_cid_text: String,
-}
 pub async fn subscribe(opt: ExecutorOptions, appchain: Cid) {
     tracing::info!("starting subscribe() of {:?}", appchain.to_string());
     let mut current_cid = appchain.clone();
