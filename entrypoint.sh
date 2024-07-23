@@ -55,6 +55,10 @@ if [ x$EVM_DA_URL = x ]; then
    EVM_DA_URL=http://127.0.0.1:8545
 fi
 
+if [ x$WORKERS_LIMIT = x ]; then
+   WORKERS_LIMIT=$(nproc)
+fi
+
 mkdir -p /data/db
 mkdir -p /data/db/chains/
 mkdir -p /data/snapshot
@@ -64,6 +68,7 @@ if [ "$RUN_TESTS" = "true" ]; then
    export RUST_LOG=info
    export RUST_BACKTRACE=full
    export LAMBADA_LOGS_DIR=$LAMBADA_LOGS_DIR
+   export WORKERS_LIMIT=$WORKERS_LIMIT
    /bin/lambada --espresso-testnet-sequencer-url $ESPRESSO_TESTNET_SEQUENCER_URL \
 	   --celestia-testnet-sequencer-url $CELESTIA_TESTNET_SEQUENCER_URL \
       --avail-testnet-sequencer-url $AVAIL_TESTNET_SEQUENCER_URL \
@@ -78,6 +83,8 @@ if [ "$RUN_TESTS" = "true" ]; then
 
 else
    export LAMBADA_LOGS_DIR=$LAMBADA_LOGS_DIR
+   export WORKERS_LIMIT=$WORKERS_LIMIT
+
    LAMBADA_WORKER=/bin/lambada-worker RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --espresso-testnet-sequencer-url $ESPRESSO_TESTNET_SEQUENCER_URL \
 	   --celestia-testnet-sequencer-url $CELESTIA_TESTNET_SEQUENCER_URL \
       --avail-testnet-sequencer-url $AVAIL_TESTNET_SEQUENCER_URL \
