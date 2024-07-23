@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use sha3::{Digest, Sha3_256};
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{Cursor, Read, Write};
 use std::os::fd::{AsFd, AsRawFd};
@@ -71,6 +72,7 @@ fn main() {
         usize,
         (Pid, Rc<PipeReader>, Option<Rc<PipeWriter>>, Rc<PipeWriter>),
     > = HashMap::new();
+    let mut subprocesses_waiting_list: VecDeque<Vec<u8>> = VecDeque::new();
     let mut events = Events::new();
     loop {
         events.clear();
@@ -90,6 +92,7 @@ fn main() {
                         &stdin,
                         key,
                         None,
+                        &mut subprocesses_waiting_list,
                     );
                 }
             } else if children_hash_map.contains_key(&ev.key) {
@@ -110,6 +113,18 @@ fn main() {
                             drop(output_pipe);
                         }
                         waitpid(child.1 .0, None).unwrap();
+                        // Checks if there are any queued subprocesses
+                        if let Some(input) = subprocesses_waiting_list.pop_front() {
+                            run_forking(
+                                input.to_vec(),
+                                &mut children_hash_map,
+                                &poller,
+                                &stdin,
+                                key,
+                                None,
+                                &mut subprocesses_waiting_list,
+                            );
+                        }
                     } else if let Ok(_) =
                         serde_json::from_slice::<ExecuteParameters>(&execute_output)
                     {
@@ -122,6 +137,7 @@ fn main() {
                             &stdin,
                             key,
                             Some(child.1 .3),
+                            &mut subprocesses_waiting_list,
                         );
                     }
                 }
@@ -140,89 +156,97 @@ fn run_forking(
     stdin: &PipeReader,
     key: &i32,
     requestor_pipe: Option<Rc<PipeWriter>>,
+    subprocesses_waiting_list: &mut VecDeque<Vec<u8>>,
 ) {
     let (reader_for_parent, writer_for_parent) = os_pipe::pipe().unwrap();
     let (reader_for_child, writer_for_child) = os_pipe::pipe().unwrap();
     let input = serde_json::from_slice::<ExecuteParameters>(&parameter).unwrap();
-    match unsafe { fork() } {
-        Ok(ForkResult::Parent { child, .. }) => {
-            drop(reader_for_parent);
-            drop(writer_for_child);
-            let reader_for_child = Rc::new(reader_for_child);
-            let child_writer = Rc::new(writer_for_parent);
-
-            children_hash_map.insert(
-                reader_for_child.clone().as_fd().as_raw_fd() as usize,
-                (
-                    child,
-                    reader_for_child.clone(),
-                    requestor_pipe,
-                    child_writer,
-                ),
-            );
-
-            unsafe {
+    let limit_of_subprocesses: usize = std::env::var("WORKERS_LIMIT")
+        .ok()
+        .and_then(|val| val.parse().ok())
+        .unwrap_or_else(|| num_cpus::get());
+    if children_hash_map.len() < limit_of_subprocesses {
+        match unsafe { fork() } {
+            Ok(ForkResult::Parent { child, .. }) => {
+                drop(reader_for_parent);
+                drop(writer_for_child);
+                let reader_for_child = Rc::new(reader_for_child);
+                let child_writer = Rc::new(writer_for_parent);
+                children_hash_map.insert(
+                    reader_for_child.clone().as_fd().as_raw_fd() as usize,
+                    (
+                        child,
+                        reader_for_child.clone(),
+                        requestor_pipe,
+                        child_writer,
+                    ),
+                );
+                unsafe {
+                    poller
+                        .add(
+                            &reader_for_child.as_fd(),
+                            Event::readable(reader_for_child.as_raw_fd() as usize),
+                        )
+                        .unwrap();
+                }
                 poller
-                    .add(
-                        &reader_for_child.as_fd(),
-                        Event::readable(reader_for_child.as_raw_fd() as usize),
-                    )
+                    .modify(&stdin.as_fd(), Event::readable(key.clone() as usize))
                     .unwrap();
             }
-            poller
-                .modify(&stdin.as_fd(), Event::readable(key.clone() as usize))
-                .unwrap();
-        }
-        Ok(ForkResult::Child) => {
-            drop(reader_for_child);
-            let log_directory_path: String =
-                std::env::var("LAMBADA_LOGS_DIR").unwrap_or_else(|_| String::from("/tmp"));
-            let my_stdout = File::create(format!(
-                "{}/{}-stdout.log",
-                log_directory_path, input.identifier
-            ))
-            .expect("Failed to create stdout file");
-            let my_stderr = File::create(format!(
-                "{}/{}-stderr.log",
-                log_directory_path, input.identifier
-            ))
-            .expect("Failed to create stderr file");
-            let stdout_fd = my_stdout.as_raw_fd();
-            let stderr_fd = my_stderr.as_raw_fd();
-            unsafe {
-                libc::close(1);
-                libc::close(2);
-                libc::dup2(stdout_fd, 1);
-                libc::dup2(stderr_fd, 2);
+            Ok(ForkResult::Child) => {
+                drop(reader_for_child);
+                let log_directory_path: String =
+                    std::env::var("LAMBADA_LOGS_DIR").unwrap_or_else(|_| String::from("/tmp"));
+                let my_stdout = File::create(format!(
+                    "{}/{}-stdout.log",
+                    log_directory_path, input.identifier
+                ))
+                .expect("Failed to create stdout file");
+                let my_stderr = File::create(format!(
+                    "{}/{}-stderr.log",
+                    log_directory_path, input.identifier
+                ))
+                .expect("Failed to create stderr file");
+                let stdout_fd = my_stdout.as_raw_fd();
+                let stderr_fd = my_stderr.as_raw_fd();
+                unsafe {
+                    libc::close(1);
+                    libc::close(2);
+                    libc::dup2(stdout_fd, 1);
+                    libc::dup2(stderr_fd, 2);
+                }
+                task::block_on(async {
+                    setup_logging();
+                    setup_backtrace();
+                    let result = execute(
+                        input.ipfs_url.as_str(),
+                        input.ipfs_write_url.as_str(),
+                        input.payload,
+                        Cid::try_from(input.state_cid).unwrap(),
+                        input
+                            .metadata
+                            .iter()
+                            .map(|(k, v)| (hex::decode(&k).unwrap(), hex::decode(&v).unwrap()))
+                            .collect::<HashMap<Vec<u8>, Vec<u8>>>(),
+                        input.max_cycles_input,
+                        &writer_for_child,
+                        &reader_for_parent,
+                    )
+                    .await;
+
+                    let response = ExecuteResult {
+                        identifier: input.identifier,
+                        result,
+                    };
+                    write_message(&writer_for_child, &response).unwrap();
+                });
+                drop(reader_for_parent);
+                std::process::exit(0);
             }
-            task::block_on(async {
-                setup_logging();
-                setup_backtrace();
-                let result = execute(
-                    input.ipfs_url.as_str(),
-                    input.ipfs_write_url.as_str(),
-                    input.payload,
-                    Cid::try_from(input.state_cid).unwrap(),
-                    input
-                        .metadata
-                        .iter()
-                        .map(|(k, v)| (hex::decode(&k).unwrap(), hex::decode(&v).unwrap()))
-                        .collect::<HashMap<Vec<u8>, Vec<u8>>>(),
-                    input.max_cycles_input,
-                    &writer_for_child,
-                    &reader_for_parent,
-                )
-                .await;
-                let response = ExecuteResult {
-                    identifier: input.identifier,
-                    result,
-                };
-                write_message(&writer_for_child, &response).unwrap();
-            });
-            drop(reader_for_parent);
-            std::process::exit(0);
+            Err(_) => {}
         }
-        Err(_) => {}
+    } else {
+        subprocesses_waiting_list.push_back(parameter);
     }
 }
 
