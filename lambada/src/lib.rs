@@ -12,14 +12,11 @@ use std::os::fd::AsRawFd;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ExecutorOptions {
-    pub espresso_testnet_sequencer_url: String,
-    pub celestia_testnet_sequencer_url: String,
-    pub avail_testnet_sequencer_url: String,
     pub ipfs_url: String,
     pub ipfs_write_url: String,
     pub db_path: String,
     pub server_address: String,
-    pub evm_da_url: String,
+    pub sequencer_map: String,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -29,7 +26,9 @@ pub struct SubscribeInput {
     pub current_cid: Vec<u8>,
     pub chain_vm_id: String,
     pub genesis_cid_text: String,
+    pub network_type: String,
 }
+
 pub fn setup_subscriber(sequencer: &str) -> Option<(SubscribeInput, String)> {
     let chain_cid = &env::args().collect::<Vec<_>>()[1];
     let log_directory_path: String =
@@ -73,15 +72,6 @@ pub fn read_message(mut pipe: &os_pipe::PipeReader) -> Result<Vec<u8>, std::io::
 }
 #[derive(Parser, Clone, Debug)]
 pub struct Options {
-    #[clap(long, env = "ESPRESSO_TESTNET_SEQUENCER_URL")]
-    pub espresso_testnet_sequencer_url: String,
-
-    #[clap(long, env = "CELESTIA_TESTNET_SEQUENCER_URL")]
-    pub celestia_testnet_sequencer_url: String,
-
-    #[clap(long, env = "AVAIL_TESTNET_SEQUENCER_URL")]
-    pub avail_testnet_sequencer_url: String,
-
     #[clap(long, env = "MACHINE_DIR")]
     pub machine_dir: String,
 
@@ -94,11 +84,11 @@ pub struct Options {
     #[clap(long, env = "IPFS_WRITE_URL")]
     pub ipfs_write_url: String,
 
-    #[clap(long, env = "EVM_DA_URL")]
-    pub evm_da_url: String,
-
     #[clap(long, env = "AUTOMATIC_SUBSCRIBE", default_value = "")]
     pub automatic_subscribe: String,
+
+    #[clap(long, env = "SEQUENCER_MAP", default_value = "")]
+    pub sequencer_map: String,
 }
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use committable::{Commitment, Committable};

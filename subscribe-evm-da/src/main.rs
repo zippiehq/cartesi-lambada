@@ -40,6 +40,7 @@ async fn main() {
             &mut Cid::try_from(subscribe_input.current_cid).unwrap(),
             subscribe_input.genesis_cid_text,
             subscribe_input.chain_vm_id,
+            subscribe_input.network_type,
         )
         .await;
     }
@@ -51,10 +52,23 @@ async fn subscribe_evm_da(
     current_cid: &mut Cid,
     genesis_cid_text: String,
     chain_vm_id: String,
+    network_type: String,
 ) {
-    let eth_rpc_url = opt.evm_da_url.clone();
+    let sequencer_map = serde_json::from_str::<serde_json::Value>(&opt.sequencer_map)
+        .expect("error getting sequencer url from sequencer map");
+    let evm_da_client_endpoint = sequencer_map
+        .get("evm-da")
+        .unwrap()
+        .get(network_type)
+        .unwrap()
+        .get("endpoint")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
+
     let eth_client = Arc::new(
-        ethers::providers::Provider::<ethers::providers::Http>::try_from(&eth_rpc_url)
+        ethers::providers::Provider::<ethers::providers::Http>::try_from(&evm_da_client_endpoint)
             .expect("Could not instantiate Ethereum HTTP Provider"),
     );
     let namespace = chain_vm_id.clone();

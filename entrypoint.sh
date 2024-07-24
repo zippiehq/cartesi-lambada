@@ -51,12 +51,47 @@ if [ x$AVAIL_TESTNET_SEQUENCER_URL = x ]; then
    AVAIL_TESTNET_SEQUENCER_URL=wss://turing-rpc.avail.so/ws
 fi
 
+if [ x$AVAIL_MAINNET_SEQUENCER_URL = x ]; then
+   AVAIL_MAINNET_SEQUENCER_URL=wss://mainnet.avail-rpc.com
+fi
+
 if [ x$EVM_DA_URL = x ]; then
    EVM_DA_URL=http://127.0.0.1:8545
 fi
 
 if [ x$WORKERS_LIMIT = x ]; then
    WORKERS_LIMIT=$(nproc)
+fi
+
+if [ x$SEQUENCER_MAP = x ]; then
+   SEQUENCER_MAP=$(cat <<EOF
+   {
+      "avail": {
+         "testnet": {
+            "endpoint": "$AVAIL_TESTNET_SEQUENCER_URL"
+         },
+         "mainnet": {
+            "endpoint": "$AVAIL_MAINNET_SEQUENCER_URL"
+         }
+      },
+      "espresso": {
+         "testnet": {
+            "endpoint": "$ESPRESSO_TESTNET_SEQUENCER_URL"
+         }
+      },
+      "celestia": {
+         "testnet": {
+            "rpc_endpoint": "$CELESTIA_TESTNET_SEQUENCER_URL"
+         }
+      },
+      "evm-da": {
+         "testnet": {
+            "endpoint": "$EVM_DA_URL"
+         }
+      }
+   }
+EOF
+)
 fi
 
 mkdir -p /data/db
@@ -69,12 +104,9 @@ if [ "$RUN_TESTS" = "true" ]; then
    export RUST_BACKTRACE=full
    export LAMBADA_LOGS_DIR=$LAMBADA_LOGS_DIR
    export WORKERS_LIMIT=$WORKERS_LIMIT
-   /bin/lambada --espresso-testnet-sequencer-url $ESPRESSO_TESTNET_SEQUENCER_URL \
-	   --celestia-testnet-sequencer-url $CELESTIA_TESTNET_SEQUENCER_URL \
-      --avail-testnet-sequencer-url $AVAIL_TESTNET_SEQUENCER_URL \
-	   --machine-dir=/data/base-machines/lambada-base-machine \
+   /bin/lambada --machine-dir=/data/base-machines/lambada-base-machine \
 	   --ipfs-url $IPFS_URL \
-	   --evm-da-url $EVM_DA_URL \
+      --sequencer-map "$SEQUENCER_MAP" \
       --db-path /data/db/ 2>&1 > $LAMBADA_LOGS_DIR/lambada.log &
 
    sleep 240
@@ -85,11 +117,8 @@ else
    export LAMBADA_LOGS_DIR=$LAMBADA_LOGS_DIR
    export WORKERS_LIMIT=$WORKERS_LIMIT
 
-   LAMBADA_WORKER=/bin/lambada-worker RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --espresso-testnet-sequencer-url $ESPRESSO_TESTNET_SEQUENCER_URL \
-	   --celestia-testnet-sequencer-url $CELESTIA_TESTNET_SEQUENCER_URL \
-      --avail-testnet-sequencer-url $AVAIL_TESTNET_SEQUENCER_URL \
-	   --machine-dir=/data/base-machines/lambada-base-machine \
+   LAMBADA_WORKER=/bin/lambada-worker RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --machine-dir=/data/base-machines/lambada-base-machine \
 	   --ipfs-url $IPFS_URL \
-	   --evm-da-url $EVM_DA_URL \
+      --sequencer-map "$SEQUENCER_MAP" \
       --db-path /data/db/  2>&1 > $LAMBADA_LOGS_DIR/lambada.log
 fi
