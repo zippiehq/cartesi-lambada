@@ -1,8 +1,8 @@
+use serde_json::Value;
 use sha3::{Digest, Sha3_256};
 
-use crate::ExecutorOptions;
-use crate::SubscribeInput;
-use cid::{Cid, CidGeneric};
+use crate::{ExecutorOptions, SubscribeInput};
+use cid::Cid;
 use futures_util::TryStreamExt;
 use hyper::Request;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
@@ -144,7 +144,7 @@ pub async fn subscribe(opt: ExecutorOptions, appchain: Cid) {
 
         tracing::info!("iterating through blocks from height {:?}", current_height);
 
-        let r#type: String = chain_info
+        let sequencer_type: String = chain_info
             .get("sequencer")
             .unwrap()
             .get("type")
@@ -153,9 +153,21 @@ pub async fn subscribe(opt: ExecutorOptions, appchain: Cid) {
             .unwrap()
             .to_string();
 
-        tracing::info!("chain type: {:?}", r#type);
+        tracing::info!("chain type: {:?}", sequencer_type);
+
+        let network_type: String = chain_info
+            .get("sequencer")
+            .unwrap()
+            .get("network-type")
+            .unwrap_or(&Value::String("testnet".to_string()))
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        tracing::info!("network type: {:?}", network_type);
+
         let mut subscribe_path = String::new();
-        match r#type.as_str() {
+        match sequencer_type.as_str() {
             "avail" => {
                 subscribe_path = String::from("/bin/subscribe-avail");
             }
@@ -171,7 +183,10 @@ pub async fn subscribe(opt: ExecutorOptions, appchain: Cid) {
             "evm-blocks" => {
                 subscribe_path = String::from("/bin/subscribe-evm-blocks");
             }
-            _ => tracing::info!("Unknown sequencer type: {}", r#type),
+            _ => {
+                tracing::info!("Unknown sequencer type: {}", sequencer_type);
+                return;
+            }
         }
         start_subprocess(
             current_height,
@@ -181,6 +196,7 @@ pub async fn subscribe(opt: ExecutorOptions, appchain: Cid) {
             chain_vm_id.clone(),
             genesis_cid_text.clone(),
             subscribe_path,
+            network_type,
         )
         .expect("Failed to subscribe");
     }
@@ -194,6 +210,7 @@ fn start_subprocess(
     chain_vm_id: String,
     genesis_cid_text: String,
     subscribe_path: String,
+    network_type: String,
 ) -> std::io::Result<std::process::ExitStatus> {
     let chain_cid = Cid::try_from(chain_info_cid.clone()).unwrap().to_string();
     let input = SubscribeInput {
@@ -202,6 +219,7 @@ fn start_subprocess(
         current_cid,
         chain_vm_id,
         genesis_cid_text,
+        network_type,
     };
 
     let mut subscribe_child = Command::new(subscribe_path)

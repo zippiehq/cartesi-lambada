@@ -43,6 +43,7 @@ async fn main() {
             &mut Cid::try_from(subscribe_input.current_cid).unwrap(),
             subscribe_input.chain_vm_id,
             subscribe_input.genesis_cid_text,
+            subscribe_input.network_type,
         )
         .await;
     }
@@ -54,15 +55,28 @@ async fn subscribe_celestia(
     current_cid: &mut Cid,
     chain_vm_id: String,
     genesis_cid_text: String,
+    network_type: String,
 ) {
+    let sequencer_map = serde_json::from_str::<serde_json::Value>(&opt.sequencer_map)
+        .expect("error getting sequencer url from sequencer map");
+    let celestia_client_endpoint = sequencer_map
+        .get("celestia")
+        .unwrap()
+        .get(network_type)
+        .unwrap()
+        .get("endpoint")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
+
     let token = match std::env::var("CELESTIA_TESTNET_NODE_AUTH_TOKEN_READ") {
         Ok(token) => token,
         Err(_) => return,
     };
-    let client =
-        celestia_rpc::Client::new(&opt.celestia_testnet_sequencer_url, Some(token.as_str()))
-            .await
-            .unwrap();
+    let client = celestia_rpc::Client::new(&celestia_client_endpoint, Some(token.as_str()))
+        .await
+        .unwrap();
     let current_height = if current_height == 0 {
         1
     } else {

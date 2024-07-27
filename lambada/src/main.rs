@@ -20,10 +20,11 @@ extern crate lambada;
 use lambada::executor::BincodedCompute;
 use lambada::executor::{calculate_sha256, subscribe};
 use lambada::EspressoTransaction;
+use lambada::ExecutorOptions;
 use lambada::Options;
-use lambada::{ExecutorOptions, SubscribeInput};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlite::State;
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -35,14 +36,11 @@ use std::sync::Arc;
 use std::thread;
 async fn start_subscriber(options: Arc<lambada::Options>, cid: Cid, server_address: String) {
     let executor_options = ExecutorOptions {
-        espresso_testnet_sequencer_url: options.espresso_testnet_sequencer_url.clone(),
-        celestia_testnet_sequencer_url: options.celestia_testnet_sequencer_url.clone(),
-        avail_testnet_sequencer_url: options.avail_testnet_sequencer_url.clone(),
         ipfs_url: options.ipfs_url.clone(),
         ipfs_write_url: options.ipfs_write_url.clone(),
         db_path: options.db_path.clone(),
         server_address,
-        evm_da_url: options.evm_da_url.clone(),
+        sequencer_map: options.sequencer_map.clone(),
     };
 
     tracing::info!("Subscribing to appchain {:?}", cid.to_string());
@@ -200,7 +198,7 @@ async fn request_handler(
             .collect();
     }
     match (request.method().clone(), segments) {
-        (hyper::Method::GET, ["chain_info_template", sequencer]) => {
+        (hyper::Method::GET, ["chain_info_template", sequencer, network_type]) => {
             let random_number: u64 = rand::thread_rng().gen();
             if *sequencer != "espresso" {
                 let json_error = serde_json::json!({
@@ -215,12 +213,22 @@ async fn request_handler(
             let https = HttpsConnector::new();
             let client = Client::builder().build::<_, hyper::Body>(https);
 
-            let uri: String = format!(
-                "{}/v0/status/block-height",
-                options.espresso_testnet_sequencer_url.clone()
-            )
-            .parse()
-            .unwrap();
+            let sequencer_map = serde_json::from_str::<serde_json::Value>(&options.sequencer_map)
+                .expect("error getting sequencer url from sequencer map");
+            let endpoint_url = sequencer_map
+                .get(sequencer)
+                .unwrap()
+                .get(network_type)
+                .unwrap()
+                .get("endpoint")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string();
+
+            let uri: String = format!("{}/v0/status/block-height", endpoint_url)
+                .parse()
+                .unwrap();
 
             let block_req = Request::builder()
                 .method("GET")
@@ -587,48 +595,69 @@ async fn request_handler(
         (hyper::Method::GET, ["find_inclusion", appchain, tx_hash]) => {
             let https = HttpsConnector::new();
             let client = Client::builder().build::<_, hyper::Body>(https);
+            let ipfs_client = IpfsClient::from_str(&options.ipfs_url).unwrap();
 
-            let uri: String = format!(
-                "{}/availability/transaction/hash/{}",
-                options.espresso_testnet_sequencer_url.clone(),
-                tx_hash
-            )
-            .parse()
-            .unwrap();
+            match ipfs_client
+                .cat(&(appchain.to_string() + "/gov/chain-info.json"))
+                .map_ok(|chunk| chunk.to_vec())
+                .try_concat()
+                .await
+            {
+                Ok(chain_info) => {
+                    let chain_info = serde_json::from_slice::<serde_json::Value>(&chain_info)
+                        .expect("error reading chain-info.json file");
 
-            let block_req = Request::builder()
-                .method("GET")
-                .uri(uri)
-                .body(Body::empty())
-                .unwrap();
-            let block_response = client.request(block_req).await.unwrap();
-            let body_bytes = hyper::body::to_bytes(block_response).await.unwrap();
+                    let chain_vm_id: u64 = chain_info
+                        .get("sequencer")
+                        .unwrap()
+                        .get("vm-id")
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .parse::<u64>()
+                        .unwrap();
 
-            let json_tx = serde_json::from_slice::<serde_json::Value>(&body_bytes).unwrap();
-            match json_tx["transaction"]["vm"].as_u64() {
-                Some(vm_id) => {
-                    let ipfs_client = IpfsClient::from_str(&options.ipfs_url).unwrap();
-                    match ipfs_client
-                        .cat(&(appchain.to_string() + "/gov/chain-info.json"))
-                        .map_ok(|chunk| chunk.to_vec())
-                        .try_concat()
-                        .await
-                    {
-                        Ok(chain_info) => {
-                            let chain_info =
-                                serde_json::from_slice::<serde_json::Value>(&chain_info)
-                                    .expect("error reading chain-info.json file");
+                    let network_type: String = chain_info
+                        .get("sequencer")
+                        .unwrap()
+                        .get("network-type")
+                        .unwrap_or(&Value::String("testnet".to_string()))
+                        .as_str()
+                        .unwrap()
+                        .to_string();
 
-                            let chain_vm_id: u64 = chain_info
-                                .get("sequencer")
-                                .unwrap()
-                                .get("vm-id")
-                                .unwrap()
-                                .as_str()
-                                .unwrap()
-                                .parse::<u64>()
-                                .unwrap();
+                    let sequencer_map =
+                        serde_json::from_str::<serde_json::Value>(&options.sequencer_map)
+                            .expect("error getting sequencer url from sequencer map");
+                    let espresso_client_endpoint = sequencer_map
+                        .get("espresso")
+                        .unwrap()
+                        .get(network_type)
+                        .unwrap()
+                        .get("endpoint")
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_string();
 
+                    let uri: String = format!(
+                        "{}/availability/transaction/hash/{}",
+                        espresso_client_endpoint, tx_hash
+                    )
+                    .parse()
+                    .unwrap();
+
+                    let block_req = Request::builder()
+                        .method("GET")
+                        .uri(uri)
+                        .body(Body::empty())
+                        .unwrap();
+                    let block_response = client.request(block_req).await.unwrap();
+                    let body_bytes = hyper::body::to_bytes(block_response).await.unwrap();
+
+                    let json_tx = serde_json::from_slice::<serde_json::Value>(&body_bytes).unwrap();
+                    match json_tx["transaction"]["vm"].as_u64() {
+                        Some(vm_id) => {
                             let height = json_tx["height"].as_i64().unwrap();
 
                             if vm_id == chain_vm_id {
@@ -641,10 +670,28 @@ async fn request_handler(
                                     .unwrap();
                             }
                         }
-                        Err(_) => {}
+                        None => {
+                            let json_error = serde_json::json!({
+                                "error": "not found",
+                            });
+                            let json_error = serde_json::to_string(&json_error).unwrap();
+                            return Response::builder()
+                                .status(StatusCode::BAD_REQUEST)
+                                .body(Body::from(json_error))
+                                .unwrap();
+                        }
                     }
                 }
-                None => {}
+                Err(_) => {
+                    let json_error = serde_json::json!({
+                        "error": "chain-info.json not found",
+                    });
+                    let json_error = serde_json::to_string(&json_error).unwrap();
+                    return Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Body::from(json_error))
+                        .unwrap();
+                }
             }
 
             let json_error = serde_json::json!({
@@ -788,6 +835,20 @@ async fn request_handler(
                     .unwrap()
                     .to_vec();
                 tracing::info!("chain type: {:?}", r#type);
+
+                let network_type: String = chain_info
+                    .get("sequencer")
+                    .unwrap()
+                    .get("network-type")
+                    .unwrap_or(&Value::String("testnet".to_string()))
+                    .as_str()
+                    .unwrap()
+                    .to_string();
+
+                let sequencer_map =
+                    serde_json::from_str::<serde_json::Value>(&options.sequencer_map)
+                        .expect("error getting sequencer url from sequencer map");
+
                 match r#type.as_str() {
                     "espresso" => {
                         let ipfs_client =
@@ -815,9 +876,18 @@ async fn request_handler(
                         tracing::info!("data for submitting {:?}", data.clone());
 
                         let txn = EspressoTransaction::new(chain_vm_id.into(), data.clone());
-                        let url = format!("{}", options.espresso_testnet_sequencer_url.clone())
-                            .parse()
-                            .unwrap();
+                        let espresso_client_endpoint = sequencer_map
+                            .get("espresso")
+                            .unwrap()
+                            .get(network_type)
+                            .unwrap()
+                            .get("endpoint")
+                            .unwrap()
+                            .as_str()
+                            .unwrap()
+                            .to_string();
+
+                        let url = espresso_client_endpoint.parse().unwrap();
                         let client: surf_disco::Client<tide_disco::error::ServerError> =
                             surf_disco::Client::new(url);
 
@@ -867,8 +937,19 @@ async fn request_handler(
                                     .unwrap();
                             }
                         };
+                        let celestia_client_endpoint = sequencer_map
+                            .get("celestia")
+                            .unwrap()
+                            .get(network_type)
+                            .unwrap()
+                            .get("endpoint")
+                            .unwrap()
+                            .as_str()
+                            .unwrap()
+                            .to_string();
+
                         let client = celestia_rpc::Client::new(
-                            options.celestia_testnet_sequencer_url.as_str(),
+                            &celestia_client_endpoint,
                             Some(token.as_str()),
                         )
                         .await

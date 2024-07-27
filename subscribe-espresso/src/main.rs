@@ -52,6 +52,7 @@ async fn main() {
             Arc::new(Mutex::new(Some(Cid::from_str(&chain_cid).unwrap()))),
             subscribe_input.chain_vm_id,
             subscribe_input.genesis_cid_text,
+            subscribe_input.network_type,
         )
         .await;
     }
@@ -63,8 +64,22 @@ async fn subscribe_espresso(
     current_chain_info_cid: Arc<Mutex<Option<Cid>>>,
     chain_vm_id: String,
     genesis_cid_text: String,
+    network_type: String,
 ) {
-    let query_service_url = Url::parse(&opt.espresso_testnet_sequencer_url)
+    let sequencer_map = serde_json::from_str::<serde_json::Value>(&opt.sequencer_map)
+        .expect("error getting sequencer url from sequencer map");
+    let espresso_client_endpoint = sequencer_map
+        .get("espresso")
+        .unwrap()
+        .get(network_type)
+        .unwrap()
+        .get("endpoint")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let query_service_url = Url::parse(&espresso_client_endpoint)
         .unwrap()
         .join("v0/availability")
         .unwrap();

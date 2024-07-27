@@ -50,6 +50,7 @@ async fn main() {
             &mut Cid::try_from(subscribe_input.current_cid).unwrap(),
             subscribe_input.chain_vm_id,
             subscribe_input.genesis_cid_text,
+            subscribe_input.network_type,
         )
         .await;
     }
@@ -62,10 +63,22 @@ pub async fn subscribe_avail(
     current_cid: &mut Cid,
     chain_vm_id: String,
     genesis_cid_text: String,
+    network_type: String,
 ) {
-    let client = AvailClient::new(&opt.avail_testnet_sequencer_url)
-        .await
-        .unwrap();
+    let sequencer_map = serde_json::from_str::<serde_json::Value>(&opt.sequencer_map)
+        .expect("error getting sequencer url from sequencer map");
+    let avail_client_endpoint = sequencer_map
+        .get("avail")
+        .unwrap()
+        .get(network_type)
+        .unwrap()
+        .get("endpoint")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let client = AvailClient::new(&avail_client_endpoint).await.unwrap();
     let mut current_height = if current_height == 0 {
         1
     } else {
@@ -74,7 +87,6 @@ pub async fn subscribe_avail(
     let chain_vm_id_num: u64 = chain_vm_id.parse::<u64>().expect("VM ID as u64");
     let avail_tx_namespace = chain_vm_id_num.to_be_bytes().to_vec();
     let mut avail_tx_count: u64 = 0;
-
     while let Some(block_hash) = client
         .legacy_rpc()
         .chain_get_block_hash(Some(current_height.into()))
