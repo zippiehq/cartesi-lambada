@@ -259,6 +259,7 @@ async fn request_handler(
                 ))
             {
                 let mut bincoded = false;
+                let mut json = false;
                 let mut identifier: Option<String> = None;
 
                 for query in parsed_query {
@@ -269,6 +270,22 @@ async fn request_handler(
                             }
                             Err(e) => {
                                 tracing::info!("bincoded should be boolean type");
+                                let json_error = serde_json::json!({
+                                    "error": e.to_string(),
+                                });
+                                let json_error = serde_json::to_string(&json_error).unwrap();
+                                return Response::builder()
+                                    .status(StatusCode::BAD_REQUEST)
+                                    .body(Body::from(json_error))
+                                    .unwrap();
+                            }
+                        },
+                        "json" => match query.1.parse::<bool>() {
+                            Ok(json_opt) => {
+                                json = json_opt;
+                            }
+                            Err(e) => {
+                                tracing::info!("json should be boolean type");
                                 let json_error = serde_json::json!({
                                     "error": e.to_string(),
                                 });
@@ -302,6 +319,10 @@ async fn request_handler(
                     let bincoded_data: BincodedCompute = bincode::deserialize(&data).unwrap();
                     data = bincoded_data.payload;
                     metadata = bincoded_data.metadata;
+                } else if json {
+                    let jsoned_data: BincodedCompute = serde_json::from_slice(&data).unwrap();
+                    data = jsoned_data.payload;
+                    metadata = jsoned_data.metadata;
                 }
 
                 match compute(
