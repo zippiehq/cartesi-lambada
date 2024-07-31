@@ -10,6 +10,7 @@ use cid::Cid;
 use clap::Parser;
 use committable::Committable;
 use futures::TryStreamExt;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use hyper::body::to_bytes;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{header, Body, Client, HeaderMap, Method, Request, Response, Server};
@@ -17,7 +18,7 @@ use hyper::{StatusCode, Uri};
 use hyper_tls::HttpsConnector;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 extern crate lambada;
-use lambada::executor::BincodedCompute;
+use lambada::executor::{JSONCompute, BincodedCompute};
 use lambada::executor::{calculate_sha256, subscribe};
 use lambada::EspressoTransaction;
 use lambada::ExecutorOptions;
@@ -320,9 +321,13 @@ async fn request_handler(
                     data = bincoded_data.payload;
                     metadata = bincoded_data.metadata;
                 } else if json {
-                    let jsoned_data: BincodedCompute = serde_json::from_slice(&data).unwrap();
-                    data = jsoned_data.payload;
-                    metadata = jsoned_data.metadata;
+                    let jsoned_data: JSONCompute = serde_json::from_slice(&data).unwrap();
+                    let new_metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::<Vec<u8>, Vec<u8>>::new();
+                    for (key, value) in &jsoned_data.metadata {
+                        metadata.insert(STANDARD.decode(key).unwrap(), STANDARD.decode(value).unwrap());
+                    }
+                    data = STANDARD.decode(jsoned_data.payload).unwrap();
+                    metadata = new_metadata;
                 }
 
                 match compute(

@@ -293,6 +293,12 @@ pub struct BincodedCompute {
     pub payload: Vec<u8>,
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+pub struct JSONCompute {
+    pub metadata: HashMap<String, String>,
+    pub payload: String,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SubscribeResponse {
     finished: bool,
