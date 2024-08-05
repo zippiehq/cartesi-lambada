@@ -26,7 +26,15 @@ use lambada::Options;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+#[cfg(not(feature = "no_sqlite"))]
+use sqlite::Connection;
+#[cfg(not(feature = "no_sqlite"))]
 use sqlite::State;
+#[cfg(feature = "no_sqlite")]
+use sqlite_no_default::Connection;
+#[cfg(feature = "no_sqlite")]
+use sqlite_no_default::State;
+
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -104,8 +112,8 @@ async fn main() {
     // Make sure database is initalized and then load subscriptions from database
     {
         let connection =
-            sqlite::Connection::open_thread_safe(format!("{}/subscriptions.db", context.db_path))
-                .unwrap();
+            Connection::open_thread_safe(format!("{}/subscriptions.db", context.db_path)).unwrap();
+
         let query = "
             CREATE TABLE IF NOT EXISTS subscriptions (appchain_cid BLOB(48) NOT NULL);
             CREATE TABLE IF NOT EXISTS block_callbacks (
@@ -379,11 +387,9 @@ async fn request_handler(
         (Method::POST, ["subscribe_to_callbacks", genesis_block_cid]) => {
             let body_bytes = hyper::body::to_bytes(request.into_body()).await.unwrap();
             let callback_url = String::from_utf8(body_bytes.to_vec()).unwrap();
-            let connection = sqlite::Connection::open_thread_safe(format!(
-                "{}/subscriptions.db",
-                options.db_path
-            ))
-            .unwrap();
+            let connection =
+                Connection::open_thread_safe(format!("{}/subscriptions.db", options.db_path))
+                    .unwrap();
             let mut statement = connection
                 .prepare(
                     "INSERT INTO block_callbacks (genesis_block_cid, callback_url) VALUES (?, ?)",

@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 sequencer = { git = "https://github.com/EspressoSystems/espresso-sequencer", tag= "20240603", features = ["testing"]}
-sqlite =  { version = "0.36.0", default-features = false }
+sqlite =  { version = "0.32.0", default-features = false }
 tracing = "0.1"
 async-std = { version = "1.12", features = ["attributes"] }
 hex = "0.4.3"

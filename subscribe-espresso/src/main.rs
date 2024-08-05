@@ -1,46 +1,25 @@
-use async_std::task;
 use es_version::SequencerVersion;
 use sequencer::SeqTypes;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::{
-    sync::{Arc, Mutex},
-    time::SystemTime,
-};
 use tide_disco::error::ServerError;
 type HotShotClient = surf_disco::Client<ServerError, SequencerVersion>;
 use ark_serialize::CanonicalSerialize;
-use async_compatibility_layer::logging::{setup_backtrace, setup_logging};
 use async_std::stream::StreamExt;
 use cid::Cid;
 use hotshot_query_service::availability;
 use hotshot_query_service::availability::BlockQueryData;
 use hotshot_query_service::availability::VidCommonQueryData;
 use hotshot_query_service::types::HeightIndexed;
-use hyper::Uri;
-use hyper::{header, Body, Client, Method, Request};
-use lambada::setup_subscriber;
-use lambada::{ExecutorOptions, SubscribeInput};
-use nix::libc;
-use os_pipe::PipeReader;
-use os_pipe::{dup_stdin, dup_stdout};
+use lambada::{
+    executor::calculate_sha256, handle_tx, is_chain_info_same, setup_subscriber,
+    trigger_callback_for_newblock, ExecutorOptions,
+};
 use sequencer::block::payload::{parse_ns_payload, NamespaceProof};
-use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
 use sqlite::State;
-use std::env;
-use std::fs::File;
-use std::io::Read;
-use std::os::fd::{AsFd, AsRawFd};
-use std::rc::Rc;
 use std::str::FromStr;
-use std::time::Duration;
 use surf_disco::Url;
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-pub struct BincodedCompute {
-    pub metadata: HashMap<Vec<u8>, Vec<u8>>,
-    pub payload: Vec<u8>,
-}
 
 #[async_std::main]
 async fn main() {
@@ -240,178 +219,4 @@ async fn subscribe_espresso(
             });
         }
     }
-}
-
-async fn trigger_callback_for_newblock(
-    options: Arc<ExecutorOptions>,
-    genesis_block_cid: &str,
-    block_height: u64,
-    state_cid: &str,
-) {
-    let connection =
-        sqlite::Connection::open_thread_safe(format!("{}/subscriptions.db", options.db_path))
-            .unwrap();
-    let mut statement = connection
-        .prepare("SELECT callback_url FROM block_callbacks WHERE genesis_block_cid = ?")
-        .unwrap();
-    statement.bind((1, genesis_block_cid)).unwrap();
-
-    while let Ok(State::Row) = statement.next() {
-        let callback_url = statement.read::<String, _>(0).unwrap();
-        let payload = serde_json::json!({
-            "appchain": genesis_block_cid,
-            "block_height": block_height,
-            "state_cid": state_cid
-        });
-
-        let client = Client::new();
-        let req = Request::builder()
-            .method(Method::POST)
-            .uri(callback_url)
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(payload.to_string()))
-            .unwrap();
-
-        let _ = client.request(req).await;
-    }
-}
-
-async fn handle_tx(
-    opt: ExecutorOptions,
-    data: Option<Vec<u8>>,
-    current_cid: &mut Cid,
-    metadata: HashMap<Vec<u8>, Vec<u8>>,
-    height: u64,
-    genesis_cid_text: String,
-    block_hash: String,
-) {
-    let mut bincoded_compute_data: BincodedCompute = BincodedCompute {
-        metadata: metadata.clone(),
-        payload: vec![],
-    };
-    if let Some(payload) = data.clone() {
-        bincoded_compute_data.payload = payload;
-    }
-
-    let req = Request::builder()
-        .method("POST")
-        .header("Content-Type", "application/octet-stream")
-        .uri(format!(
-            "http://{}/compute/{}?bincoded=true",
-            opt.server_address,
-            current_cid.to_string()
-        ))
-        .body(Body::from(
-            bincode::serialize(&bincoded_compute_data).unwrap(),
-        ))
-        .unwrap();
-    let client = hyper::Client::new();
-    match client.request(req).await {
-        Ok(result) => {
-            let cid = serde_json::from_slice::<serde_json::Value>(
-                &hyper::body::to_bytes(result)
-                    .await
-                    .expect("/compute failed with no response")
-                    .to_vec(),
-            )
-            .expect("/compute failed with no response");
-            let cid = Cid::try_from(cid.get("cid").unwrap().as_str().unwrap()).unwrap();
-            tracing::info!("old current_cid {:?}", cid.clone());
-            *current_cid = cid;
-            tracing::info!("resulted current_cid {:?}", current_cid.clone());
-        }
-        Err(e) => {
-            tracing::info!("no output: {:?}", e);
-        }
-    }
-
-    // XXX Is this right? Shouldn't this be after processing all tx'es?
-    let connection = sqlite::Connection::open_thread_safe(format!(
-        "{}/chains/{}",
-        opt.db_path, genesis_cid_text
-    ))
-    .unwrap();
-
-    let mut statement = connection
-        .prepare(
-            "INSERT INTO blocks (state_cid, height, sequencer_block_reference, finalized) VALUES (?, ?, ?, ?)",
-        )
-        .unwrap();
-    statement
-        .bind((1, &current_cid.to_bytes() as &[u8]))
-        .unwrap();
-    statement.bind((2, height as i64)).unwrap();
-    statement.bind((3, &block_hash as &str)).unwrap();
-    statement.bind((4, 1)).unwrap();
-    statement.next().unwrap();
-}
-
-pub fn calculate_sha256(input: &[u8]) -> Vec<u8> {
-    let mut hasher = Sha3_256::new();
-    hasher.update(input);
-    hasher.finalize().to_vec()
-}
-
-async fn is_chain_info_same(
-    opt: ExecutorOptions,
-    current_cid: Cid,
-    current_chain_info_cid: Arc<Mutex<Option<Cid>>>,
-) -> bool {
-    let new_chain_info = get_chain_info_cid(&opt, current_cid).await;
-    if new_chain_info == None {
-        tracing::error!("No chain info found, leaving");
-        return false;
-    }
-    if new_chain_info != *current_chain_info_cid.lock().unwrap() {
-        *current_chain_info_cid.lock().unwrap() = new_chain_info;
-        tracing::error!("No support for changing chain info yet");
-        return false;
-    }
-
-    return true;
-}
-
-async fn get_chain_info_cid(opt: &ExecutorOptions, current_cid: Cid) -> Option<Cid> {
-    let req = Request::builder()
-        .method("POST")
-        .uri(format!(
-            "{}/api/v0/dag/resolve?arg={}/gov/{}",
-            opt.ipfs_url,
-            current_cid.to_string(),
-            "/chain-info.json"
-        ))
-        .body(hyper::Body::empty())
-        .unwrap();
-
-    let client = Arc::new(hyper::Client::new());
-    match client.request(req).await {
-        Ok(res) => {
-            let response_cid_value = serde_json::from_slice::<serde_json::Value>(
-                &hyper::body::to_bytes(res).await.expect("no cid").to_vec(),
-            )
-            .unwrap();
-
-            let response_cid_value = Cid::try_from(
-                response_cid_value
-                    .get("Cid")
-                    .unwrap()
-                    .get("/")
-                    .unwrap()
-                    .as_str()
-                    .unwrap(),
-            )
-            .unwrap();
-            Some(response_cid_value)
-        }
-        Err(_) => None,
-    }
-}
-
-pub fn read_message(mut pipe: &os_pipe::PipeReader) -> Result<Vec<u8>, std::io::Error> {
-    let mut len: [u8; 8] = [0; 8];
-    pipe.read_exact(&mut len)?;
-    let len = u64::from_le_bytes(len);
-    let mut message: Vec<u8> = vec![0; len as usize];
-    pipe.read_exact(&mut message)?;
-    Ok(message)
 }
