@@ -1,13 +1,18 @@
 use anyhow::Result;
 use async_compatibility_layer::logging::setup_backtrace;
 use async_compatibility_layer::logging::setup_logging;
-use avail_subxt::api::vector::calls::types::FailedSendMessageTxs;
-use avail_subxt::{AvailClient, Opts};
 
+use avail_rust::avail::data_availability::calls::types::SubmitData;
+use avail_rust::avail::runtime_types::da_control::extensions::check_app_id::CheckAppId;
+use avail_rust::primitives::params::CheckAppId;
+use avail_rust::AvailConfig;
+use avail_rust::{avail, AvailExtrinsicParamsBuilder, Data, Keypair, SecretUri, SDK};
 use cid::Cid;
 use core::mem::swap;
 use futures::future::{join_all, TryFutureExt};
 use hyper::{header, Body, Client, Method, Request};
+use lambada::setup_subscriber;
+use lambada::{ExecutorOptions, SubscribeInput};
 use nix::libc;
 use os_pipe::PipeReader;
 use os_pipe::{dup_stdin, dup_stdout};
@@ -29,11 +34,7 @@ use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 use structopt::StructOpt;
-//use subxt::{config::Header as XtHeader, utils::H256};
-use avail_subxt::api::data_availability::calls::types::SubmitData;
-use avail_subxt::primitives::CheckAppId;
-use lambada::setup_subscriber;
-use lambada::{ExecutorOptions, SubscribeInput};
+use subxt::backend::{legacy::LegacyRpcMethods, rpc::RpcClient};
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct BincodedCompute {
@@ -78,7 +79,8 @@ pub async fn subscribe_avail(
         .unwrap()
         .to_string();
 
-    let client = AvailClient::new(&avail_client_endpoint).await.unwrap();
+    let client = SDK::new(&avail_client_endpoint).await.unwrap();
+
     let mut current_height = if current_height == 0 {
         1
     } else {
@@ -87,13 +89,14 @@ pub async fn subscribe_avail(
     let chain_vm_id_num: u64 = chain_vm_id.parse::<u64>().expect("VM ID as u64");
     let avail_tx_namespace = chain_vm_id_num.to_be_bytes().to_vec();
     let mut avail_tx_count: u64 = 0;
+
     while let Some(block_hash) = client
         .legacy_rpc()
         .chain_get_block_hash(Some(current_height.into()))
         .await
         .unwrap()
     {
-        let mut block = client.blocks().at(block_hash).await.unwrap();
+        //let mut block = client.api.blocks().at(block_hash).await.unwrap();
         let block_number = block.header().number;
         let connection = sqlite::Connection::open_thread_safe(format!(
             "{}/chains/{}",

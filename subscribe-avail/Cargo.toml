@@ -6,8 +6,8 @@ edition = "2021"
 [workspace]
 
 [dependencies]
-avail-subxt = { git = "https://github.com/availproject/avail", rev = "89b7fc7406dcb1146c59ab9e47901408dc8240fb" }
-avail-base = { git = "https://github.com/availproject/avail", rev = "89b7fc7406dcb1146c59ab9e47901408dc8240fb"  }
+avail-rust = { git = "https://github.com/availproject/avail" }
+avail-base = { git = "https://github.com/availproject/avail"}
 
 os_pipe = {version = "1.1.5", features = ["io_safety"]}
 nix = { version = "0.28.0", features = ["process"] }
@@ -16,6 +16,7 @@ async-std = { version = "1.12", features = ["attributes", "tokio1" ] }
 tracing = "0.1"
 log = "0.4.14"
 rand = "0.8.5"
+
 subxt = "0.34"
 
 structopt = "0.3.25"
