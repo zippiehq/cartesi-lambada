@@ -12,7 +12,8 @@ serde = { version = "1.0.163", features = ["derive"] }
 clap = { version = "4.3.10", features = ["derive", "env", "string"] }
 futures = "0.3.28"
 async-std = { version = "1.12", features = ["attributes"] }
-cartesi_lambda = {path = "../cartesi_lambda", default-features = false, features = ["measure_execution_time", "no_sqlite"]}
+cartesi_lambda= {path = "../cartesi_lambda", features = ["measure_execution_time"]}
+
 hyper = { version = "0.14", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3.28"
@@ -20,7 +21,9 @@ hex = "0.4.3"
 hyper-tls = "0.5.0"
 bincode = "1.3.3"
 serde_json = "1.0.107"
-sqlite = { version = "0.32.0", optional = true }
+sqlite = {version = "0.32.0", optional = true }
+sqlite_no_default = {package = "sqlite", version = "0.32.0", optional = true, default-features = false }
+
 cid = "0.11.0"
 ipfs-api-backend-hyper = { version = "0.6.0", features = ["with-send-sync"], default-features = false }
 rand = "0.8"
@@ -36,9 +39,6 @@ committable = { git = "https://github.com/EspressoSystems/commit" }
 ark-serialize = "0.4.2"
 tokio-test = "0.4.4"
 sequential-test = "0.2.4"
-jf-merkle-tree = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
-  "std",
-] }
 derive_more = "0.99.17"
 base64-bytes = "0.1"
 os_pipe = {version = "1.1.5", features = ["io_safety"]}
@@ -46,7 +46,7 @@ nix = { version = "0.28.0", features = ["process"] }
 
 [features]
 default = ["sqlite"]
-no_sqlite = []
+no_sqlite = ["sqlite_no_default"]
 
 [[test]]
 name = "lambada_test"

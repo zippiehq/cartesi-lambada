@@ -1,13 +1,19 @@
 use serde_json::Value;
 use sha3::{Digest, Sha3_256};
 
-use crate::{ExecutorOptions, SubscribeInput};
+use crate::{get_chain_info_cid, ExecutorOptions, SubscribeInput};
 use cid::Cid;
 use futures_util::TryStreamExt;
-use hyper::Request;
 use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
 use serde::{Deserialize, Serialize};
+#[cfg(not(feature = "no_sqlite"))]
+use sqlite::Connection;
+#[cfg(not(feature = "no_sqlite"))]
 use sqlite::State;
+#[cfg(feature = "no_sqlite")]
+use sqlite_no_default::Connection;
+#[cfg(feature = "no_sqlite")]
+use sqlite_no_default::State;
 use std::collections::HashMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -38,7 +44,7 @@ pub async fn subscribe(opt: ExecutorOptions, appchain: Cid) {
     // enter subscription loop
     loop {
         {
-            let connection = sqlite::Connection::open_thread_safe(format!(
+            let connection = Connection::open_thread_safe(format!(
                 "{}/chains/{}",
                 opt.db_path, genesis_cid_text
             ))
@@ -243,42 +249,6 @@ fn start_subprocess(
         .write_all(&execute_parameter_bytes)
         .unwrap();
     subscribe_child.wait()
-}
-
-async fn get_chain_info_cid(opt: &ExecutorOptions, current_cid: Cid) -> Option<Cid> {
-    let req = Request::builder()
-        .method("POST")
-        .uri(format!(
-            "{}/api/v0/dag/resolve?arg={}/gov/{}",
-            opt.ipfs_url,
-            current_cid.to_string(),
-            "/chain-info.json"
-        ))
-        .body(hyper::Body::empty())
-        .unwrap();
-
-    let client = Arc::new(hyper::Client::new());
-    match client.request(req).await {
-        Ok(res) => {
-            let response_cid_value = serde_json::from_slice::<serde_json::Value>(
-                &hyper::body::to_bytes(res).await.expect("no cid").to_vec(),
-            )
-            .unwrap();
-
-            let response_cid_value = Cid::try_from(
-                response_cid_value
-                    .get("Cid")
-                    .unwrap()
-                    .get("/")
-                    .unwrap()
-                    .as_str()
-                    .unwrap(),
-            )
-            .unwrap();
-            Some(response_cid_value)
-        }
-        Err(_) => None,
-    }
 }
 
 pub fn calculate_sha256(input: &[u8]) -> Vec<u8> {

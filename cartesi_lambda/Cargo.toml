@@ -15,7 +15,6 @@ futures-util = "0.3.28"
 serde_json = "1.0.100"
 futures = "0.3.28"
 async-std = { version = "1.12", features = ["attributes", "tokio1" ] }
-sqlite = { version = "0.32.0", optional = true }
 cid = "0.11.0"
 base64 = "0.21.5"
 rs-car-ipfs = { git = "https://github.com/zippiehq/rs-car-ipfs" }
@@ -29,5 +28,3 @@ rand = "0.8.5"
 
 [features]
 measure_execution_time = []
-default = ["sqlite"]
-no_sqlite = []

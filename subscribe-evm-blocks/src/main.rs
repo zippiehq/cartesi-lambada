@@ -1,35 +1,12 @@
-use async_compatibility_layer::logging::setup_backtrace;
-use async_compatibility_layer::logging::setup_logging;
-use async_std::task;
 use cid::Cid;
 use ethers::prelude::*;
 use ethers::types::{BlockId, BlockNumber};
-use hyper::{header, Body, Client, Method, Request, Uri};
-use lambada::setup_subscriber;
-use lambada::{ExecutorOptions, SubscribeInput};
-use nix::libc;
-use os_pipe::PipeReader;
-use os_pipe::{dup_stdin, dup_stdout};
-use serde::{Deserialize, Serialize};
+use lambada::{handle_tx, setup_subscriber, ExecutorOptions};
 use sqlite::State;
 use std::collections::HashMap;
-use std::env;
-use std::fs::File;
-use std::io::Read;
-use std::os::fd::AsFd;
-use std::os::fd::AsRawFd;
-use std::thread;
+use std::sync::Arc;
 use std::time::Duration;
-use std::{
-    sync::{Arc, Mutex},
-    time::SystemTime,
-};
 use tokio::time::sleep;
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-pub struct BincodedCompute {
-    pub metadata: HashMap<Vec<u8>, Vec<u8>>,
-    pub payload: Vec<u8>,
-}
 #[async_std::main]
 async fn main() {
     if let Some((subscribe_input, _)) = setup_subscriber("evm-blocks") {
@@ -141,84 +118,4 @@ async fn subscribe_evm_blocks(
             }
         }
     }
-}
-
-async fn handle_tx(
-    opt: ExecutorOptions,
-    data: Option<Vec<u8>>,
-    current_cid: &mut Cid,
-    metadata: HashMap<Vec<u8>, Vec<u8>>,
-    height: u64,
-    genesis_cid_text: String,
-    block_hash: String,
-) {
-    let mut bincoded_compute_data: BincodedCompute = BincodedCompute {
-        metadata: metadata.clone(),
-        payload: vec![],
-    };
-    if let Some(payload) = data.clone() {
-        bincoded_compute_data.payload = payload;
-    }
-    println!("handle_tx");
-
-    let req = Request::builder()
-        .method("POST")
-        .header("Content-Type", "application/octet-stream")
-        .uri(format!(
-            "http://{}/compute/{}?bincoded=true",
-            opt.server_address,
-            current_cid.to_string()
-        ))
-        .body(Body::from(
-            bincode::serialize(&bincoded_compute_data).unwrap(),
-        ))
-        .unwrap();
-    let client = hyper::Client::new();
-    match client.request(req).await {
-        Ok(result) => {
-            let cid = serde_json::from_slice::<serde_json::Value>(
-                &hyper::body::to_bytes(result)
-                    .await
-                    .expect("/compute failed with no response")
-                    .to_vec(),
-            )
-            .expect("/compute failed with no response");
-            let cid = Cid::try_from(cid.get("cid").unwrap().as_str().unwrap()).unwrap();
-            tracing::info!("old current_cid {:?}", cid.clone());
-            *current_cid = cid;
-            tracing::info!("resulted current_cid {:?}", current_cid.clone());
-        }
-        Err(e) => {
-            tracing::info!("no output: {:?}", e);
-        }
-    }
-
-    // XXX Is this right? Shouldn't this be after processing all tx'es?
-    let connection = sqlite::Connection::open_thread_safe(format!(
-        "{}/chains/{}",
-        opt.db_path, genesis_cid_text
-    ))
-    .unwrap();
-
-    let mut statement = connection
-        .prepare(
-            "INSERT INTO blocks (state_cid, height, sequencer_block_reference, finalized) VALUES (?, ?, ?, ?)",
-        )
-        .unwrap();
-    statement
-        .bind((1, &current_cid.to_bytes() as &[u8]))
-        .unwrap();
-    statement.bind((2, height as i64)).unwrap();
-    statement.bind((3, &block_hash as &str)).unwrap();
-    statement.bind((4, 1)).unwrap();
-    statement.next().unwrap();
-}
-
-pub fn read_message(mut pipe: &os_pipe::PipeReader) -> Result<Vec<u8>, std::io::Error> {
-    let mut len: [u8; 8] = [0; 8];
-    pipe.read_exact(&mut len)?;
-    let len = u64::from_le_bytes(len);
-    let mut message: Vec<u8> = vec![0; len as usize];
-    pipe.read_exact(&mut message)?;
-    Ok(message)
 }
