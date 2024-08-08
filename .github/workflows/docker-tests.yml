@@ -35,7 +35,7 @@ jobs:
     - name: Build and load Docker image with Depot
       run: |
         depot build . \
-          --project 2g4vskn96j \
+          --project hs0gfs4l0l \
           --file Dockerfile \
           --tag ${{ env.REGISTRY }}/${{ github.repository }}:latest \
           --platform linux/amd64 \
