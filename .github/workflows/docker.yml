@@ -31,7 +31,7 @@ jobs:
     - name: Build and Push Docker Image with Depot
       run: |
         depot build . \
-          --project 2g4vskn96j \
+          --project hs0gfs4l0l \
           --file Dockerfile \
           --tag ${{ env.REGISTRY }}/${{ github.repository }}:${{ matrix.arch }}-latest \
           --platform linux/${{ matrix.arch }} \
