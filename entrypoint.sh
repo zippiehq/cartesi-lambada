@@ -6,7 +6,14 @@ if [ x$IPFS_URL = x ]; then
   fi
   IPFS_PATH=/data/ipfs ipfs config Addresses.API /ip4/0.0.0.0/tcp/5001
   IPFS_PATH=/data/ipfs ipfs config Addresses.Gateway /ip4/0.0.0.0/tcp/8080
-  IPFS_PATH=/data/ipfs ipfs daemon &
+  if [ ! -z "$IPFS_GATEWAY_NOFETCH" ]; then
+    IPFS_PATH=/data/ipfs ipfs config Gateway.NoFetch true
+  fi
+  if [ ! -z "$IPFS_DAEMON_OFFLINE" ]; then
+    IPFS_PATH=/data/ipfs ipfs daemon --offline &
+  else
+    IPFS_PATH=/data/ipfs ipfs daemon &
+  fi
   IPFS_HOST="127.0.0.1"
   IPFS_PORT="5001"
   
@@ -104,6 +111,7 @@ if [ "$RUN_TESTS" = "true" ]; then
    export RUST_BACKTRACE=full
    export LAMBADA_LOGS_DIR=$LAMBADA_LOGS_DIR
    export WORKERS_LIMIT=$WORKERS_LIMIT
+   export CELESTIA_TESTNET_NODE_AUTH_TOKEN_READ=dummy
    /bin/lambada --machine-dir=/data/base-machines/lambada-base-machine \
 	   --ipfs-url $IPFS_URL \
       --sequencer-map "$SEQUENCER_MAP" \
@@ -116,6 +124,7 @@ if [ "$RUN_TESTS" = "true" ]; then
 else
    export LAMBADA_LOGS_DIR=$LAMBADA_LOGS_DIR
    export WORKERS_LIMIT=$WORKERS_LIMIT
+   export CELESTIA_TESTNET_NODE_AUTH_TOKEN_READ=dummy
 
    LAMBADA_WORKER=/bin/lambada-worker RUST_LOG=info RUST_BACKTRACE=full /bin/lambada --machine-dir=/data/base-machines/lambada-base-machine \
 	   --ipfs-url $IPFS_URL \
