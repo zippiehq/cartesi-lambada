@@ -7,7 +7,7 @@ if [ x$IPFS_URL = x ]; then
   IPFS_PATH=/data/ipfs ipfs config Addresses.API /ip4/0.0.0.0/tcp/5001
   IPFS_PATH=/data/ipfs ipfs config Addresses.Gateway /ip4/0.0.0.0/tcp/8080
   if [ ! -z "$IPFS_GATEWAY_NOFETCH" ]; then
-    IPFS_PATH=/data/ipfs ipfs config Gateway.NoFetch true
+    IPFS_PATH=/data/ipfs ipfs config --json Gateway.NoFetch true
   fi
   if [ ! -z "$IPFS_DAEMON_OFFLINE" ]; then
     IPFS_PATH=/data/ipfs ipfs daemon --offline &
