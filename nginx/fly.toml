@@ -1,4 +1,4 @@
-# fly.toml app configuration file generated for cartesi-lambada-green-brook-9338 on 2024-08-11T16:14:32Z
+# fly.toml app configuration file generated for cartesi-lambada-green-brook-9338 on 2024-08-12T11:01:12Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
@@ -9,10 +9,14 @@ primary_region = 'jnb'
 [build]
   dockerfile = 'Dockerfile'
 
+[env]
+  IPFS_DAEMON_OFFLINE = 'true'
+  IPFS_GATEWAY_NOFETCH = 'true'
+
 [http_service]
   internal_port = 80
   force_https = true
-  auto_stop_machines = true
+  auto_stop_machines = "suspend"
   auto_start_machines = true
   min_machines_running = 0
   processes = ['app']
