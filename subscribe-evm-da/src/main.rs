@@ -9,7 +9,7 @@ use sqlite::State;
 use std::str::FromStr;
 #[async_std::main]
 async fn main() {
-    if let Some((subscribe_input, _)) = setup_subscriber("evm-da") {
+    if let Some(subscribe_input) = setup_subscriber("evm-da") {
         subscribe_evm_da(
             subscribe_input.height,
             subscribe_input.opt,

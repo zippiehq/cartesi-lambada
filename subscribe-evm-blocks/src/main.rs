@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 #[async_std::main]
 async fn main() {
-    if let Some((subscribe_input, _)) = setup_subscriber("evm-blocks") {
+    if let Some(subscribe_input) = setup_subscriber("evm-blocks") {
         subscribe_evm_blocks(
             subscribe_input.height,
             subscribe_input.opt,

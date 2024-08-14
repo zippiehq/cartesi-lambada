@@ -223,13 +223,14 @@ fn start_subprocess(
         height,
         opt,
         current_cid,
+        chain_info_cid,
         chain_vm_id,
         genesis_cid_text,
         network_type,
     };
 
     let mut subscribe_child = Command::new(subscribe_path)
-        .arg(chain_cid)
+        .arg(genesis_cid_text)
         .stdout(Stdio::piped())
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())

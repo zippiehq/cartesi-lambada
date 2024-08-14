@@ -19,10 +19,10 @@ use tokio::time::sleep;
 
 #[async_std::main]
 async fn main() {
-    if let Some((subscribe_input, chain_cid)) = setup_subscriber("avail") {
+    if let Some(subscribe_input) = setup_subscriber("avail") {
         subscribe_avail(
             subscribe_input.height,
-            Cid::from_str(&chain_cid).unwrap().to_bytes(),
+            subscribe_input.current_chain_info_cid,
             subscribe_input.opt,
             &mut Cid::try_from(subscribe_input.current_cid).unwrap(),
             subscribe_input.chain_vm_id,

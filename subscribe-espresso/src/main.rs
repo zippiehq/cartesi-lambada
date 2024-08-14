@@ -23,12 +23,14 @@ use surf_disco::Url;
 
 #[async_std::main]
 async fn main() {
-    if let Some((subscribe_input, chain_cid)) = setup_subscriber("espresso") {
+    if let Some(subscribe_input) = setup_subscriber("espresso") {
         subscribe_espresso(
             subscribe_input.height,
             subscribe_input.opt,
             &mut Cid::try_from(subscribe_input.current_cid).unwrap(),
-            Arc::new(Mutex::new(Some(Cid::from_str(&chain_cid).unwrap()))),
+            Arc::new(Mutex::new(Some(
+                Cid::try_from(subscribe_input.current_chain_info_cid).unwrap(),
+            ))),
             subscribe_input.chain_vm_id,
             subscribe_input.genesis_cid_text,
             subscribe_input.network_type,
