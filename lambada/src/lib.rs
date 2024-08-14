@@ -36,23 +36,24 @@ pub struct SubscribeInput {
     pub height: u64,
     pub opt: ExecutorOptions,
     pub current_cid: Vec<u8>,
+    pub current_chain_info_cid: Vec<u8>,
     pub chain_vm_id: String,
     pub genesis_cid_text: String,
     pub network_type: String,
 }
 
-pub fn setup_subscriber(sequencer: &str) -> Option<(SubscribeInput, String)> {
-    let chain_cid = &env::args().collect::<Vec<_>>()[1];
+pub fn setup_subscriber(sequencer: &str) -> Option<SubscribeInput> {
+    let genesis_cid = &env::args().collect::<Vec<_>>()[1];
     let log_directory_path: String =
         std::env::var("LAMBADA_LOGS_DIR").unwrap_or_else(|_| String::from("/tmp"));
     let my_stdout = File::create(format!(
         "{}/{}-{}-stdout.log",
-        log_directory_path, chain_cid, sequencer
+        log_directory_path, genesis_cid, sequencer
     ))
     .expect("Failed to create stdout file");
     let my_stderr = File::create(format!(
         "{}/{}-{}-stderr.log",
-        log_directory_path, chain_cid, sequencer
+        log_directory_path, genesis_cid, sequencer
     ))
     .expect("Failed to create stderr file");
     let stdout_fd = my_stdout.as_raw_fd();
@@ -67,10 +68,7 @@ pub fn setup_subscriber(sequencer: &str) -> Option<(SubscribeInput, String)> {
     setup_backtrace();
     let mut stdin = dup_stdin().unwrap();
     if let Ok(parameter) = read_message(&mut stdin) {
-        return Some((
-            serde_json::from_slice::<SubscribeInput>(&parameter).unwrap(),
-            chain_cid.to_string(),
-        ));
+        return Some(serde_json::from_slice::<SubscribeInput>(&parameter).unwrap());
     }
     return None;
 }

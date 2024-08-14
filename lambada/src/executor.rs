@@ -218,18 +218,18 @@ fn start_subprocess(
     subscribe_path: String,
     network_type: String,
 ) -> std::io::Result<std::process::ExitStatus> {
-    let chain_cid = Cid::try_from(chain_info_cid.clone()).unwrap().to_string();
     let input = SubscribeInput {
         height,
         opt,
         current_cid,
+        current_chain_info_cid: chain_info_cid,
         chain_vm_id,
-        genesis_cid_text,
+        genesis_cid_text: genesis_cid_text.clone(),
         network_type,
     };
 
     let mut subscribe_child = Command::new(subscribe_path)
-        .arg(chain_cid)
+        .arg(genesis_cid_text)
         .stdout(Stdio::piped())
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
