@@ -40,7 +40,7 @@ pub struct SubscribeInput {
     pub chain_vm_id: String,
     pub genesis_cid_text: String,
     pub network_type: String,
-    pub chain_info: serde_json::Value,
+    pub chain_info: String,
 }
 
 pub fn setup_subscriber(sequencer: &str) -> Option<SubscribeInput> {

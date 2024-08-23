@@ -203,7 +203,7 @@ pub async fn subscribe(opt: ExecutorOptions, appchain: Cid) {
             genesis_cid_text.clone(),
             subscribe_path,
             network_type,
-            &chain_info,
+            (&chain_info).to_string(),
         )
         .expect("Failed to subscribe");
     }
@@ -218,7 +218,7 @@ fn start_subprocess(
     genesis_cid_text: String,
     subscribe_path: String,
     network_type: String,
-    chain_info: &serde_json::Value,
+    chain_info: String,
 ) -> std::io::Result<std::process::ExitStatus> {
     let input = SubscribeInput {
         height,
@@ -228,7 +228,7 @@ fn start_subprocess(
         chain_vm_id,
         genesis_cid_text: genesis_cid_text.clone(),
         network_type,
-        chain_info: chain_info.clone(),
+        chain_info: chain_info.to_string(),
     };
 
     let mut subscribe_child = Command::new(subscribe_path)
