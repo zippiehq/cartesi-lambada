@@ -49,6 +49,10 @@ const PMA_CMIO_RX_BUFFER_LOG2_SIZE_DEF: u64 = 21;
 const PMA_CMIO_TX_BUFFER_LOG2_SIZE_DEF: u64 = 21;
 const HTIF_YIELD_REASON_ADVANCE_STATE_DEF: u16 = 0;
 
+const HTIF_YIELD_REASON_TX_REPORT_DEF: u16 = 0x5;
+const HTIF_YIELD_REASON_TX_NOTICE_DEF: u16 = 0x4;
+const HTIF_YIELD_REASON_TX_VOUCHER_DEF: u16 = 0x3;
+
 fn main() {
     let log_directory_path: String =
         std::env::var("LAMBADA_LOGS_DIR").unwrap_or_else(|_| String::from("/tmp"));
@@ -272,6 +276,82 @@ fn encode_evm_advance(payload: Vec<u8>) -> Vec<u8> {
         payload: payload.into(),
     };
     call.abi_encode()
+}
+
+async fn hash_execute(
+    payload: Option<Vec<u8>>,
+    max_cycles_input: Option<u64>,
+    writer_for_child: &PipeWriter,
+    reader_for_parent: &PipeReader,
+    machine_state_hash: String,
+) -> Result<Vec<u8>, serde_error::Error> {
+    let mut machine: Option<Machine> = None;
+
+    let mut machine_loaded_state = 0;
+
+    machine = Some(
+        Machine::load(
+            std::path::Path::new(&format!("/data/snapshot/{}", machine_state_hash).as_str()),
+            RuntimeConfig {
+                skip_root_hash_check: true,
+                skip_root_hash_store: true,
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    );
+
+    let mut machine = machine.unwrap();
+    let mut max_cycles = u64::MAX;
+    if let Some(m_cycle) = max_cycles_input {
+        max_cycles = m_cycle;
+    }
+    let mut store_machine = false;
+    loop {
+        let mut interpreter_break_reason = machine.run(max_cycles);
+
+        if !machine.read_iflags_y().unwrap() {
+            interpreter_break_reason = machine.run(max_cycles);
+            let machine_state_hash = machine.get_root_hash().unwrap().to_string();
+        }
+        const M16: u64 = ((1 << 16) - 1);
+        let data = machine.read_htif_tohost_data().unwrap();
+        let reason = ((data >> 32) & M16) as u16;
+
+        match reason {
+            EXCEPTION => {
+                tracing::info!("EXCEPTION");
+                drop(machine);
+                return Err(serde_error::Error::new(&std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "exception",
+                )));
+            }
+            HTIF_YIELD_REASON_TX_VOUCHER_DEF => {}
+            HTIF_YIELD_REASON_TX_REPORT_DEF => {}
+            HTIF_YIELD_REASON_TX_NOTICE_DEF => {}
+            HTIF_YIELD_MANUAL_REASON_RX_ACCEPTED_DEF => {
+                tracing::info!("HTIF_YIELD_MANUAL_REASON_RX_ACCEPTED_DEF");
+                if store_machine {
+                    machine
+                        .store(Path::new(
+                            &format!("/data/snapshot/{}", machine_state_hash,),
+                        ))
+                        .unwrap();
+                    store_machine = false;
+                } else {
+                    let payload = payload.clone().unwrap_or_default();
+                    let encoded = encode_evm_advance(payload);
+                    machine
+                        .send_cmio_response(HTIF_YIELD_REASON_ADVANCE_STATE_DEF, &encoded)
+                        .unwrap();
+                    store_machine = true;
+                }
+            }
+            _ => {}
+        }
+        machine.reset_iflags_y().unwrap();
+    }
 }
 
 async fn execute(
