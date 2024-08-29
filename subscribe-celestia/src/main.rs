@@ -94,6 +94,7 @@ async fn subscribe_celestia(
                     .await
                 {
                     Ok(blobs) => {
+                        let blobs = blobs.unwrap();
                         let connection = sqlite::Connection::open_thread_safe(format!(
                             "{}/chains/{}",
                             opt.db_path, genesis_cid_text
