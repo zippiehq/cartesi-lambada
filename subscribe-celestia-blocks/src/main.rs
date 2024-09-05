@@ -28,6 +28,7 @@ pub async fn main() {
                 subscribe_input.genesis_cid_text,
                 subscribe_input.chain_vm_id,
                 subscribe_input.network_type,
+                subscribe_input.chain_info,
             )
             .await;
             if let Err(e) = results {
@@ -46,9 +47,12 @@ pub async fn subscribe_celestia_blocks(
     genesis_cid_text: String,
     chain_vm_id: String,
     network_type: String,
+    chain_info: String,
 ) -> Result<(), Box<dyn Error>> {
     let sequencer_map = serde_json::from_str::<serde_json::Value>(&opt.sequencer_map)
         .expect("error getting sequencer url from sequencer map");
+    let chain_info_value: serde_json::Value =
+        serde_json::from_str(&chain_info).expect("Failed to parse chain_info JSON");
     let ethereum_url_client_endpoint = sequencer_map
         .get("evm-da")
         .unwrap()
@@ -59,7 +63,6 @@ pub async fn subscribe_celestia_blocks(
         .as_str()
         .unwrap()
         .to_string();
-
     let celestia_url_client_endpoint = sequencer_map
         .get("celestia")
         .unwrap()
@@ -71,126 +74,123 @@ pub async fn subscribe_celestia_blocks(
         .unwrap()
         .to_string();
 
+    let starting_ethereum_height: u64 = chain_info_value
+        .get("sequencer")
+        .unwrap()
+        .get("ethereum-starting-height")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+
     let celestia_client = CelestiaClient::new(&celestia_url_client_endpoint, None).await?;
     let eth_provider = Arc::new(
         ethers::providers::Provider::<Http>::try_from(&ethereum_url_client_endpoint)
             .expect("Could not instantiate Ethereum node url"),
     );
 
-    let mut current_eth_block = eth_provider
-        .get_block_number()
-        .await
-        .expect("Failed to fetch the current Ethereum block number");
-    println!("Current Ethereum block number is: {}", current_eth_block);
+    let mut current_eth_block = starting_ethereum_height;
 
-    let target_address = H160::from_str("0xff00000000000000000000000000000000000010")
-        .expect("Invalid Ethereum address");
-
+    // loop through Ethereum blocks and check for Celestia references
     while current_celestia_height < u64::MAX {
-        match eth_provider
+        // get the block with transactions
+        let block_with_txs = eth_provider
             .get_block_with_txs(BlockId::Number(BlockNumber::from(current_eth_block)))
-            .await
-        {
-            Ok(Some(block_with_txs)) => {
-                for tx in block_with_txs.transactions {
-                    if let Some(to_address) = tx.to {
-                        if to_address == target_address {
-                            let decoded = decode_calldata(&tx.input)?;
-                            if decoded.block_number == current_celestia_height + 1 {
-                                match celestia_client
-                                    .header_wait_for_height(current_celestia_height + 1)
-                                    .await
-                                {
-                                    Ok(header) => {
-                                        println!(
-                                            "Reached cthe current celestia block height {}: {}",
-                                            current_celestia_height + 1,
-                                            header.hash()
-                                        );
-                                        let valid = handle_potential_celestia_reference(
-                                            &decoded,
-                                            &celestia_client,
-                                            decoded.block_number,
-                                        )
-                                        .await?;
-                                        if valid {
-                                            let blobs = celestia_client
-                                                .blob_get_all(
-                                                    decoded.block_number,
-                                                    &[Namespace::new_v0(&chain_vm_id.as_bytes())
-                                                        .unwrap()],
-                                                )
-                                                .await?;
-                                            let connection =
-                                                sqlite::Connection::open_thread_safe(format!(
-                                                    "{}/chains/{}",
-                                                    opt.db_path, genesis_cid_text
-                                                ))
-                                                .unwrap();
+            .await?;
 
-                                            let mut statement = connection
-                                                .prepare("SELECT * FROM blocks WHERE height=?")
-                                                .unwrap();
-                                            statement
-                                                .bind((1, decoded.block_number as i64))
-                                                .unwrap();
+        // check if the block has any transactions
+        if let Some(block_with_txs) = block_with_txs {
+            for tx in block_with_txs.transactions {
+                // decode the calldata
+                let decoded = decode_calldata(&tx.input)?;
+                // check if the decoded block number is the next Celestia block
+                if decoded.block_number == current_celestia_height + 1 {
+                    let header = celestia_client
+                        .header_get_by_height(current_celestia_height + 1)
+                        .await?;
 
-                                            for blob in blobs {
-                                                let mut metadata: HashMap<Vec<u8>, Vec<u8>> =
-                                                    HashMap::new();
-                                                metadata.insert(
-                                                    calculate_sha256("sequencer".as_bytes()),
-                                                    calculate_sha256("celestia".as_bytes()),
-                                                );
+                    println!(
+                        "reached the current celestia height {}: {}",
+                        current_celestia_height + 1,
+                        header.hash()
+                    );
+                    // check if the Celestia block hash matches the decoded hash
+                    let valid = handle_potential_celestia_reference(
+                        &decoded,
+                        &celestia_client,
+                        decoded.block_number,
+                    )
+                    .await?;
+                    // if the Celestia block hash matches the decoded hash, process the transactions
+                    if valid {
+                        println!(
+                            "Valid transaction at Celestia block {}: {}",
+                            decoded.block_number, tx.hash
+                        );
+                        // get all blobs for the Celestia block
+                        let blobs = celestia_client
+                            .blob_get_all(
+                                decoded.block_number,
+                                &[Namespace::new_v0(&chain_vm_id.as_bytes()).unwrap()],
+                            )
+                            .await?;
+                        // open a connection to the SQLite database
+                        let connection = sqlite::Connection::open_thread_safe(format!(
+                            "{}/chains/{}",
+                            opt.db_path, genesis_cid_text
+                        ))
+                        .unwrap();
 
-                                                metadata.insert(
-                                                    calculate_sha256(
-                                                        "celestia-block-height".as_bytes(),
-                                                    ),
-                                                    decoded.block_number.to_be_bytes().to_vec(),
-                                                );
+                        let mut statement = connection
+                            .prepare("SELECT * FROM blocks WHERE height=?")
+                            .unwrap();
+                        statement.bind((1, decoded.block_number as i64)).unwrap();
+                        for blob in blobs {
+                            let mut metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+                            metadata.insert(
+                                calculate_sha256("sequencer".as_bytes()),
+                                calculate_sha256("celestia".as_bytes()),
+                            );
+                            metadata.insert(
+                                calculate_sha256("celestia-block-height".as_bytes()),
+                                decoded.block_number.to_be_bytes().to_vec(),
+                            );
 
-                                                handle_tx(
-                                                    opt.clone(),
-                                                    Some(blob.data),
-                                                    current_cid,
-                                                    metadata,
-                                                    current_celestia_height,
-                                                    genesis_cid_text.clone(),
-                                                    hex::encode(
-                                                        &decoded.block_number.to_be_bytes(),
-                                                    ),
-                                                )
-                                                .await;
+                            handle_tx(
+                                opt.clone(),
+                                Some(blob.data),
+                                current_cid,
+                                metadata,
+                                current_celestia_height,
+                                genesis_cid_text.clone(),
+                                hex::encode(&decoded.block_number.to_be_bytes()),
+                            )
+                            .await;
 
-                                                println!("Processed transaction at Celestia block {}: {}", decoded.block_number, tx.hash);
-                                            }
-                                            current_celestia_height = decoded.block_number;
-                                        } else {
-                                            println!("Validation failed for Celestia block at height {}: incorrect hash", decoded.block_number);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Failed to wait for current celestia block height {}: {}", current_celestia_height + 1, e);
-                                        return Err(e.into());
-                                    }
-                                }
-                            }
+                            println!(
+                                "Processed blob at Celestia block {}: {}",
+                                decoded.block_number, tx.hash
+                            );
                         }
+                        // update the current Celestia block height
+                        current_celestia_height = decoded.block_number;
+                    } else {
+                        println!(
+                            "Validation failed for Celestia block at height {}: incorrect hash",
+                            decoded.block_number
+                        );
                     }
                 }
             }
-            Ok(None) => println!(
+        } else {
+            println!(
                 "No transactions found in Ethereum block {}",
                 current_eth_block
-            ),
-            Err(e) => {
-                eprintln!("Error fetching Ethereum block {}: {}", current_eth_block, e);
-                sleep(Duration::from_secs(10)).await;
-            }
+            );
         }
-        current_eth_block += U64::from(1);
-
+        // increment the Ethereum block number and wait for 1 second
+        current_eth_block += 1;
         sleep(Duration::from_secs(1)).await;
     }
     Ok(())
