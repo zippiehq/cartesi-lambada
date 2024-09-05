@@ -88,7 +88,7 @@ if [ x$SEQUENCER_MAP = x ]; then
       },
       "celestia": {
          "testnet": {
-            "rpc_endpoint": "$CELESTIA_TESTNET_SEQUENCER_URL"
+            "endpoint": "$CELESTIA_TESTNET_SEQUENCER_URL"
          }
       },
       "evm-da": {
