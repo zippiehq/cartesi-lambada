@@ -49,6 +49,8 @@ const PMA_CMIO_RX_BUFFER_LOG2_SIZE_DEF: u64 = 21;
 const PMA_CMIO_TX_BUFFER_LOG2_SIZE_DEF: u64 = 21;
 const HTIF_YIELD_REASON_ADVANCE_STATE_DEF: u16 = 0;
 
+type CmRuntimeConfig = cartesi_machine_sys::cm_machine_runtime_config;
+
 fn main() {
     let log_directory_path: String =
         std::env::var("LAMBADA_LOGS_DIR").unwrap_or_else(|_| String::from("/tmp"));
@@ -430,9 +432,18 @@ async fn execute(
                     Cid::try_from(app_cid.clone()).unwrap().to_string()
                 )),
                 RuntimeConfig {
-                    skip_root_hash_check: true,
-                    skip_root_hash_store: true,
-                    ..Default::default()
+                    values: CmRuntimeConfig {
+                        skip_root_hash_check: true,
+                        skip_root_hash_store: true,
+                        concurrency: cartesi_machine_sys::cm_concurrency_runtime_config {
+                            update_merkle_tree: 0,
+                        },
+                        htif: cartesi_machine_sys::cm_htif_runtime_config {
+                            no_console_putchar: false,
+                        },
+                        skip_version_check: false,
+                        soft_yield: false,
+                    },
                 },
             )
             .unwrap(),
@@ -459,9 +470,18 @@ async fn execute(
             Machine::load(
                 std::path::Path::new(&format!("/data/snapshot/{}_get_app", base_image).as_str()),
                 RuntimeConfig {
-                    skip_root_hash_check: true,
-                    skip_root_hash_store: true,
-                    ..Default::default()
+                    values: CmRuntimeConfig {
+                        skip_root_hash_check: true,
+                        skip_root_hash_store: true,
+                        concurrency: cartesi_machine_sys::cm_concurrency_runtime_config {
+                            update_merkle_tree: 0,
+                        },
+                        htif: cartesi_machine_sys::cm_htif_runtime_config {
+                            no_console_putchar: false,
+                        },
+                        skip_version_check: false,
+                        soft_yield: false,
+                    },
                 },
             )
             .unwrap(),
@@ -487,9 +507,18 @@ async fn execute(
             Machine::load(
                 std::path::Path::new(&format!("/data/snapshot/{}", base_image).as_str()),
                 RuntimeConfig {
-                    skip_root_hash_check: true,
-                    skip_root_hash_store: true,
-                    ..Default::default()
+                    values: CmRuntimeConfig {
+                        skip_root_hash_check: true,
+                        skip_root_hash_store: true,
+                        concurrency: cartesi_machine_sys::cm_concurrency_runtime_config {
+                            update_merkle_tree: 0,
+                        },
+                        htif: cartesi_machine_sys::cm_htif_runtime_config {
+                            no_console_putchar: false,
+                        },
+                        skip_version_check: false,
+                        soft_yield: false,
+                    },
                 },
             )
             .unwrap(),
@@ -537,9 +566,18 @@ async fn execute(
                 Machine::load(
                     std::path::Path::new(&format!("/data/snapshot/{}", base_image)),
                     RuntimeConfig {
-                        skip_root_hash_check: true,
-                        skip_root_hash_store: true,
-                        ..Default::default()
+                        values: CmRuntimeConfig {
+                            skip_root_hash_check: true,
+                            skip_root_hash_store: true,
+                            concurrency: cartesi_machine_sys::cm_concurrency_runtime_config {
+                                update_merkle_tree: 0,
+                            },
+                            htif: cartesi_machine_sys::cm_htif_runtime_config {
+                                no_console_putchar: false,
+                            },
+                            skip_version_check: false,
+                            soft_yield: false,
+                        },
                     },
                 )
                 .unwrap(),
@@ -562,7 +600,7 @@ async fn execute(
         max_cycles = m_cycle;
     }
     loop {
-        let mut interpreter_break_reason: Option<cartesi_machine::BreakReason> = None;
+        let mut interpreter_break_reason: Option<u32> = None;
         let time_before_read_iflags_y = SystemTime::now();
         // Are we yielded? If not, continue machine execution
         if !machine.read_iflags_y().unwrap() {
@@ -958,7 +996,7 @@ async fn execute(
         // We should basically not get here in a well-behaved app, it should FINISH (accept/reject), EXCEPTION
         if matches!(
             interpreter_break_reason,
-            Some(cartesi_machine::BreakReason::Halted)
+            Some(cartesi_machine::break_reason::HALTED)
         ) {
             tracing::info!("halted");
             drop(machine);
@@ -969,7 +1007,7 @@ async fn execute(
         }
         if matches!(
             interpreter_break_reason,
-            Some(cartesi_machine::BreakReason::ReachedTargetMcycle)
+            Some(cartesi_machine::break_reason::REACHED_TARGET_MCYCLE)
         ) {
             tracing::info!("reached cycles limit before completion of execution");
             drop(machine);
