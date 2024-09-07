@@ -129,57 +129,61 @@ pub async fn subscribe_celestia_blocks(
                             decoded.block_number, tx.hash
                         );
                         // get all blobs for the Celestia block
-                        let blobs = celestia_client
+                        match celestia_client
                             .blob_get_all(
                                 decoded.block_number,
                                 &[Namespace::new_v0(&chain_vm_id.as_bytes()).unwrap()],
                             )
-                            .await?;
-                        // open a connection to the SQLite database
-                        let connection = sqlite::Connection::open_thread_safe(format!(
-                            "{}/chains/{}",
-                            opt.db_path, genesis_cid_text
-                        ))
-                        .unwrap();
+                            .await
+                        {
+                            Ok(blobs) => {
+                                let blobs = blobs.unwrap();
+                                let connection = sqlite::Connection::open_thread_safe(format!(
+                                    "{}/chains/{}",
+                                    opt.db_path, genesis_cid_text
+                                ))
+                                .unwrap();
 
-                        let mut statement = connection
-                            .prepare("SELECT * FROM blocks WHERE height=?")
-                            .unwrap();
-                        statement.bind((1, decoded.block_number as i64)).unwrap();
-                        for blob in blobs {
-                            let mut metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
-                            metadata.insert(
-                                calculate_sha256("sequencer".as_bytes()),
-                                calculate_sha256("celestia".as_bytes()),
-                            );
-                            metadata.insert(
-                                calculate_sha256("celestia-block-height".as_bytes()),
-                                decoded.block_number.to_be_bytes().to_vec(),
-                            );
+                                let mut statement = connection
+                                    .prepare("SELECT * FROM blocks WHERE height=?")
+                                    .unwrap();
+                                statement.bind((1, decoded.block_number as i64)).unwrap();
+                                for blob in blobs {
+                                    let mut metadata: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+                                    metadata.insert(
+                                        calculate_sha256("sequencer".as_bytes()),
+                                        calculate_sha256("celestia".as_bytes()),
+                                    );
+                                    metadata.insert(
+                                        calculate_sha256("celestia-block-height".as_bytes()),
+                                        decoded.block_number.to_be_bytes().to_vec(),
+                                    );
 
-                            handle_tx(
-                                opt.clone(),
-                                Some(blob.data),
-                                current_cid,
-                                metadata,
-                                current_celestia_height,
-                                genesis_cid_text.clone(),
-                                hex::encode(&decoded.block_number.to_be_bytes()),
-                            )
-                            .await;
+                                    handle_tx(
+                                        opt.clone(),
+                                        Some(blob.data),
+                                        current_cid,
+                                        metadata,
+                                        current_celestia_height,
+                                        genesis_cid_text.clone(),
+                                        hex::encode(&decoded.block_number.to_be_bytes()),
+                                    )
+                                    .await;
 
-                            println!(
-                                "Processed blob at Celestia block {}: {}",
-                                decoded.block_number, tx.hash
-                            );
+                                    println!(
+                                        "Processed blob at Celestia block {}: {}",
+                                        decoded.block_number, tx.hash
+                                    );
+                                }
+                                current_celestia_height = decoded.block_number;
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "Failed to fetch blobs for Celestia block {}: {}",
+                                    decoded.block_number, e
+                                );
+                            }
                         }
-                        // update the current Celestia block height
-                        current_celestia_height = decoded.block_number;
-                    } else {
-                        println!(
-                            "Validation failed for Celestia block at height {}: incorrect hash",
-                            decoded.block_number
-                        );
                     }
                 }
             }
