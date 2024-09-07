@@ -23,3 +23,5 @@ os_pipe = {version = "1.1.5", features = ["io_safety"]}
 nix = { version = "0.28.0", features = ["process"] }
 async-compatibility-layer = { git = "https://github.com/EspressoSystems/async-compatibility-layer", tag = "1.4.1", features = ["logging-utils"] }
 lambada = {path = "../lambada"}
+ipfs-api-backend-hyper = { version = "0.6.0", features = ["with-send-sync"], default-features = false }
+futures-util = "0.3.28"

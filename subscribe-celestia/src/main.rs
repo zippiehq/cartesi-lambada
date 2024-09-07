@@ -1,18 +1,21 @@
 use celestia_rpc::{BlobClient, HeaderClient};
 use celestia_types::nmt::Namespace;
+use celestia_types::SyncState;
 use cid::Cid;
+use futures_util::TryStreamExt;
+use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
+use lambada::Batch;
 use lambada::{
     executor::calculate_sha256, handle_tx, is_chain_info_same, setup_subscriber,
     trigger_callback_for_newblock, ExecutorOptions,
 };
+use serde_json::Value;
 use sqlite::State;
-use std::str::FromStr;
 use std::thread;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
-
 #[async_std::main]
 async fn main() {
     if let Some(subscribe_input) = setup_subscriber("celestia") {
@@ -50,6 +53,28 @@ async fn subscribe_celestia(
         .unwrap()
         .to_string();
 
+    let ipfs_client = IpfsClient::from_str(&opt.ipfs_url).unwrap();
+
+    let mut chain_info = ipfs_client
+        .cat(&format!("{}/gov/chain-info.json", current_cid.to_string()))
+        .map_ok(|chunk| chunk.to_vec())
+        .try_concat()
+        .await
+        .unwrap();
+    let chain_info = serde_json::from_slice::<serde_json::Value>(&chain_info)
+        .expect("error reading chain-info.json file");
+
+    let activate_paio_batch: bool = chain_info
+        .get("sequencer")
+        .unwrap()
+        .get("paio-batches")
+        .unwrap_or(&Value::String("false".to_string()))
+        .as_str()
+        .unwrap()
+        .parse::<bool>()
+        .unwrap();
+
+    println!("activate_paio_batch {:?}", activate_paio_batch);
     let token = match std::env::var("CELESTIA_TESTNET_NODE_AUTH_TOKEN_READ") {
         Ok(token) => token,
         Err(_) => return,
@@ -121,28 +146,57 @@ async fn subscribe_celestia(
                             // We've not processed this block before, so let's process it (can we even end here since we set starting point?)
                             if statement_state == State::Done {
                                 for blob in blobs {
-                                    let mut tx_metadata = metadata.clone();
-                                    tx_metadata.insert(
-                                        calculate_sha256("celestia-tx-count".as_bytes()),
-                                        celestia_tx_count.to_be_bytes().to_vec(),
-                                    );
-                                    tx_metadata.insert(
-                                        calculate_sha256("celestia-tx-namespace".as_bytes()),
-                                        celestia_tx_namespace.clone(),
-                                    );
+                                    if activate_paio_batch {
+                                        println!("receiving of new batch");
+                                        let batch = Batch::from_bytes(&blob.data).unwrap();
+                                        for tx in batch.txs {
+                                            let mut tx_metadata = metadata.clone();
 
-                                    handle_tx(
-                                        opt.clone(),
-                                        Some(blob.data),
-                                        current_cid,
-                                        tx_metadata,
-                                        state.height,
-                                        genesis_cid_text.clone(),
-                                        hex::encode(extended_header.commit.block_id.hash),
-                                    )
-                                    .await;
+                                            tx_metadata.insert(
+                                                calculate_sha256("celestia-tx-count".as_bytes()),
+                                                celestia_tx_count.to_be_bytes().to_vec(),
+                                            );
+                                            tx_metadata.insert(
+                                                calculate_sha256(
+                                                    "celestia-tx-namespace".as_bytes(),
+                                                ),
+                                                celestia_tx_namespace.clone(),
+                                            );
+                                            handle_tx(
+                                                opt.clone(),
+                                                Some(tx),
+                                                current_cid,
+                                                tx_metadata.clone(),
+                                                state.height,
+                                                genesis_cid_text.clone(),
+                                                hex::encode(extended_header.commit.block_id.hash),
+                                            )
+                                            .await;
+                                            celestia_tx_count += 1;
+                                        }
+                                    } else {
+                                        let mut tx_metadata = metadata.clone();
+                                        tx_metadata.insert(
+                                            calculate_sha256("celestia-tx-count".as_bytes()),
+                                            celestia_tx_count.to_be_bytes().to_vec(),
+                                        );
+                                        tx_metadata.insert(
+                                            calculate_sha256("celestia-tx-namespace".as_bytes()),
+                                            celestia_tx_namespace.clone(),
+                                        );
 
-                                    celestia_tx_count += 1;
+                                        handle_tx(
+                                            opt.clone(),
+                                            Some(blob.data),
+                                            current_cid,
+                                            tx_metadata,
+                                            state.height,
+                                            genesis_cid_text.clone(),
+                                            hex::encode(extended_header.commit.block_id.hash),
+                                        )
+                                        .await;
+                                        celestia_tx_count += 1;
+                                    }
                                 }
                             }
 

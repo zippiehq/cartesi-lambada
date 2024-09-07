@@ -1,22 +1,23 @@
-use anyhow::Result;
 use avail_subxt::AvailClient;
 
 use avail_subxt::api::data_availability::calls::types::SubmitData;
 use avail_subxt::primitives::CheckAppId;
 use cid::Cid;
+use futures_util::TryStreamExt;
+use ipfs_api_backend_hyper::{IpfsApi, IpfsClient, TryFromUri};
+use lambada::Batch;
 use lambada::{
     executor::calculate_sha256, handle_tx, setup_subscriber, trigger_callback_for_newblock,
     ExecutorOptions,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlite::State;
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tokio::time::sleep;
-
 #[async_std::main]
 async fn main() {
     if let Some(subscribe_input) = setup_subscriber("avail") {
@@ -54,6 +55,29 @@ pub async fn subscribe_avail(
         .as_str()
         .unwrap()
         .to_string();
+
+    let ipfs_client = IpfsClient::from_str(&opt.ipfs_url).unwrap();
+    let mut chain_info = ipfs_client
+        .cat(&format!("{}/gov/chain-info.json", current_cid.to_string()))
+        .map_ok(|chunk| chunk.to_vec())
+        .try_concat()
+        .await
+        .unwrap();
+
+    let chain_info = serde_json::from_slice::<serde_json::Value>(&chain_info)
+        .expect("error reading chain-info.json file");
+
+    let activate_paio_batch: bool = chain_info
+        .get("sequencer")
+        .unwrap()
+        .get("paio-batches")
+        .unwrap_or(&Value::String("false".to_string()))
+        .as_str()
+        .unwrap()
+        .parse::<bool>()
+        .unwrap();
+
+    println!("activate_paio_batch {:?}", activate_paio_batch);
 
     let client = AvailClient::new(&avail_client_endpoint).await.unwrap();
     let mut current_height = if current_height == 0 {
@@ -118,35 +142,61 @@ pub async fn subscribe_avail(
                             if app_id
                                 == parity_scale_codec::Compact(chain_vm_id_num.try_into().unwrap())
                             {
-                                tracing::info!(
-                                    "app_id {:?}, tx_data.to_vec() {:?} block number {:?}",
-                                    app_id,
-                                    String::from_utf8(tx_data.to_vec()).unwrap(),
-                                    block_number
-                                );
-                                let mut tx_metadata = metadata.clone();
+                                if activate_paio_batch {
+                                    println!("receiving of new batch");
+                                    let batch = Batch::from_bytes(tx_data).unwrap();
+                                    for tx in batch.txs {
+                                        let mut tx_metadata = metadata.clone();
+                                        tx_metadata.insert(
+                                            calculate_sha256("avail-tx-count".as_bytes()),
+                                            avail_tx_count.to_be_bytes().to_vec(),
+                                        );
+                                        tx_metadata.insert(
+                                            calculate_sha256("avail-tx-namespace".as_bytes()),
+                                            avail_tx_namespace.clone(),
+                                        );
+                                        handle_tx(
+                                            opt.clone(),
+                                            Some(tx),
+                                            current_cid,
+                                            tx_metadata,
+                                            current_height,
+                                            genesis_cid_text.clone(),
+                                            hex::encode(block_hash),
+                                        )
+                                        .await;
+                                        avail_tx_count += 1;
+                                    }
+                                } else {
+                                    tracing::info!(
+                                        "app_id {:?}, tx_data.to_vec() {:?} block number {:?}",
+                                        app_id,
+                                        String::from_utf8(tx_data.to_vec()).unwrap(),
+                                        block_number
+                                    );
+                                    let mut tx_metadata = metadata.clone();
 
-                                tx_metadata.insert(
-                                    calculate_sha256("avail-tx-count".as_bytes()),
-                                    avail_tx_count.to_be_bytes().to_vec(),
-                                );
-                                tx_metadata.insert(
-                                    calculate_sha256("avail-tx-namespace".as_bytes()),
-                                    avail_tx_namespace.clone(),
-                                );
+                                    tx_metadata.insert(
+                                        calculate_sha256("avail-tx-count".as_bytes()),
+                                        avail_tx_count.to_be_bytes().to_vec(),
+                                    );
+                                    tx_metadata.insert(
+                                        calculate_sha256("avail-tx-namespace".as_bytes()),
+                                        avail_tx_namespace.clone(),
+                                    );
 
-                                handle_tx(
-                                    opt.clone(),
-                                    Some(tx_data.to_vec()),
-                                    current_cid,
-                                    tx_metadata,
-                                    current_height,
-                                    genesis_cid_text.clone(),
-                                    hex::encode(block_hash),
-                                )
-                                .await;
-
-                                avail_tx_count += 1;
+                                    handle_tx(
+                                        opt.clone(),
+                                        Some(tx_data.to_vec()),
+                                        current_cid,
+                                        tx_metadata,
+                                        current_height,
+                                        genesis_cid_text.clone(),
+                                        hex::encode(block_hash),
+                                    )
+                                    .await;
+                                    avail_tx_count += 1;
+                                }
                             }
                         }
                     }

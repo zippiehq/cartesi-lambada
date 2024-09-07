@@ -310,3 +310,14 @@ impl EspressoTransaction {
         Self { namespace, payload }
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+pub struct Batch {
+    pub txs: Vec<Vec<u8>>,
+}
+
+impl Batch {
+    pub fn from_bytes(bytes: &[u8]) -> postcard::Result<Self> {
+        postcard::from_bytes(bytes)
+    }
+}
