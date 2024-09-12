@@ -74,10 +74,21 @@ pub async fn subscribe_celestia_blocks(
         .unwrap()
         .to_string();
 
-    let starting_ethereum_height: u64 = chain_info_value
+    let system_starting_celestia_height: u64 = chain_info_value
         .get("sequencer")
         .unwrap()
-        .get("ethereum-starting-height")
+        .get("system-celestia-starting-height")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+
+// starting_celestia_height
+    let system_starting_ethereum_height: u64 = chain_info_value
+        .get("sequencer")
+        .unwrap()
+        .get("system-ethereum-starting-height")
         .unwrap()
         .as_str()
         .unwrap()
@@ -90,13 +101,14 @@ pub async fn subscribe_celestia_blocks(
             .expect("Could not instantiate Ethereum node url"),
     );
 
-    let mut current_eth_block = starting_ethereum_height;
+    let mut system_current_eth_height = system_starting_ethereum_height;
+    let mut system_current_celestia_height = system_starting_celestia_height;
 
     // loop through Ethereum blocks and check for Celestia references
-    while current_celestia_height < u64::MAX {
+    while system_current_celestia_height < u64::MAX {
         // get the block with transactions
         let block_with_txs = eth_provider
-            .get_block_with_txs(BlockId::Number(BlockNumber::from(current_eth_block)))
+            .get_block_with_txs(BlockId::Number(BlockNumber::from(system_current_eth_height)))
             .await?;
 
         // check if the block has any transactions
@@ -105,14 +117,14 @@ pub async fn subscribe_celestia_blocks(
                 // decode the calldata
                 let decoded = decode_calldata(&tx.input)?;
                 // check if the decoded block number is the next Celestia block
-                if decoded.block_number == current_celestia_height + 1 {
+                if decoded.block_number == system_current_celestia_height + 1 {
                     let header = celestia_client
-                        .header_get_by_height(current_celestia_height + 1)
+                        .header_get_by_height(system_current_celestia_height + 1)
                         .await?;
 
                     println!(
                         "reached the current celestia height {}: {}",
-                        current_celestia_height + 1,
+                        system_current_celestia_height + 1,
                         header.hash()
                     );
                     // check if the Celestia block hash matches the decoded hash
@@ -123,7 +135,7 @@ pub async fn subscribe_celestia_blocks(
                     )
                     .await?;
                     // if the Celestia block hash matches the decoded hash, process the transactions
-                    if valid {
+                    if valid && decoded.block_number >= current_celestia_height {
                         println!(
                             "Valid transaction at Celestia block {}: {}",
                             decoded.block_number, tx.hash
@@ -175,7 +187,7 @@ pub async fn subscribe_celestia_blocks(
                                         decoded.block_number, tx.hash
                                     );
                                 }
-                                current_celestia_height = decoded.block_number;
+                                system_current_celestia_height = decoded.block_number;
                             }
                             Err(e) => {
                                 eprintln!(
@@ -190,11 +202,11 @@ pub async fn subscribe_celestia_blocks(
         } else {
             println!(
                 "No transactions found in Ethereum block {}",
-                current_eth_block
+                system_current_ethereum_height
             );
         }
         // increment the Ethereum block number and wait for 1 second
-        current_eth_block += 1;
+        system_current_ethereum_height += 1;
         sleep(Duration::from_secs(1)).await;
     }
     Ok(())
