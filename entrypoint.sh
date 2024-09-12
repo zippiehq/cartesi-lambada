@@ -16,7 +16,7 @@ if [ x$IPFS_URL = x ]; then
   fi
   IPFS_HOST="127.0.0.1"
   IPFS_PORT="5001"
-  
+
 if [ -z "$LAMBADA_LOGS_DIR" ]; then
   LAMBADA_LOGS_DIR=/tmp
 fi
@@ -119,7 +119,7 @@ if [ "$RUN_TESTS" = "true" ]; then
 
    sleep 240
       export SERVER_ADDRESS=http://127.0.0.1:3033
-   /bin/lambada_test --test-threads=1 --nocapture 
+   /bin/lambada_test --test-threads=1 --nocapture
 
 else
    export LAMBADA_LOGS_DIR=$LAMBADA_LOGS_DIR
