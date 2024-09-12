@@ -84,7 +84,7 @@ pub async fn subscribe_celestia_blocks(
         .parse::<u64>()
         .unwrap();
 
-// starting_celestia_height
+    // starting_celestia_height
     let system_starting_ethereum_height: u64 = chain_info_value
         .get("sequencer")
         .unwrap()
@@ -108,7 +108,9 @@ pub async fn subscribe_celestia_blocks(
     while system_current_celestia_height < u64::MAX {
         // get the block with transactions
         let block_with_txs = eth_provider
-            .get_block_with_txs(BlockId::Number(BlockNumber::from(system_current_eth_height)))
+            .get_block_with_txs(BlockId::Number(BlockNumber::from(
+                system_current_eth_height,
+            )))
             .await?;
 
         // check if the block has any transactions
@@ -202,11 +204,11 @@ pub async fn subscribe_celestia_blocks(
         } else {
             println!(
                 "No transactions found in Ethereum block {}",
-                system_current_ethereum_height
+                system_current_eth_height
             );
         }
         // increment the Ethereum block number and wait for 1 second
-        system_current_ethereum_height += 1;
+        system_current_eth_height += 1;
         sleep(Duration::from_secs(1)).await;
     }
     Ok(())
