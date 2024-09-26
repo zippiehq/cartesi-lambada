@@ -162,9 +162,9 @@ RUN apt-get update && DEBIAN_FRONTEND="noninteractive" apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && rm cartesi-machine-v0.17.0_$ARCH.deb
 
-RUN curl -LO https://github.com/ipfs/kubo/releases/download/v0.24.0/kubo_v0.24.0_linux-$ARCH.tar.gz
-RUN tar -xvzf kubo_v0.24.0_linux-$ARCH.tar.gz
-RUN bash kubo/install.sh && rm -rf kubo kubo_v0.24.0_linux-$ARCH.tar.gz
+RUN curl -LO https://github.com/ipfs/kubo/releases/download/v0.30.0/kubo_v0.30.0_linux-$ARCH.tar.gz
+RUN tar -xvzf kubo_v0.30.0_linux-$ARCH.tar.gz
+RUN bash kubo/install.sh && rm -rf kubo kubo_v0.30.0_linux-$ARCH.tar.gz
 
 COPY --from=lambada-image /lambada-base-machine.car.gz /lambada-base-machine.car.gz
 COPY --from=build-lambada /build/target/$RELEASE_DIR/lambada /bin/lambada
