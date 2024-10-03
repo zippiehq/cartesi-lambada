@@ -48,7 +48,7 @@ fi
 export IPFS_WRITE_URL
 
 if [ x$ESPRESSO_TESTNET_SEQUENCER_URL = x ]; then
-   ESPRESSO_TESTNET_SEQUENCER_URL=https://query.cappuccino.testnet.espresso.network
+   ESPRESSO_TESTNET_SEQUENCER_URL=https://query.decaf.testnet.espresso.network
 fi
 
 if [ x$CELESTIA_TESTNET_SEQUENCER_URL = x ]; then
