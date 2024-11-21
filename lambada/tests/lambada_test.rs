@@ -155,7 +155,7 @@ mod lambada_functions_test {
                     .expect("/compute test failed with no response");
                     assert_eq!(
                         cid.get("cid").unwrap().as_str().unwrap(),
-                        COMPUTE_CID_EXPECTED
+                        "bafybeiincorrectcidexamplewrongcid"
                     );
                 }
                 Err(e) => {
