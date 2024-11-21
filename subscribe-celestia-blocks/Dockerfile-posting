@@ -1,0 +1,15 @@
+FROM rust:latest
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    protobuf-compiler \
+    curl \
+    git \
+    cmake \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone https://github.com/nyakiomaina/celestia-example /app && cd /app && git checkout a6c7ff85b71d6fcfb5d39bc82c13a0911dc94440
+WORKDIR /app
+RUN cargo clean
+RUN cargo build --release
+CMD ["./target/release/celestia-example"]

@@ -5,8 +5,8 @@ on:
     branches:
       - main
   pull_request:
-    branches: 
-      - '*' 
+    branches:
+      - '*'
 
 jobs:
   check_format:
@@ -16,7 +16,7 @@ jobs:
     - name: Install/update rustfmt
       run: |
         rustup update
-        rustup component add rustfmt 
+        rustup component add rustfmt
     - name: Check formatting
       run: cargo fmt -- --check
 
@@ -39,8 +39,13 @@ jobs:
       run: |
         cd subscribe-evm-blocks
         cargo fmt -- --check
-        
+
     - name: Check formatting in subscribe-evm-da directory
       run: |
         cd subscribe-evm-da
+        cargo fmt -- --check
+
+    - name: Check formatting in subscribe-celestia-blocks directory
+      run: |
+        cd subscribe-celestia-blocks
         cargo fmt -- --check
